@@ -230,6 +230,7 @@ int main(int argc, char** argv) {
 
                 if(result == CREATE_BACKUP) {
                     debug("CREATE_BACKUP\n");
+                    debug("Current PID: %d, Parent PID: %d\n", getpid(), parent_process);
                     if (parent_process == getpid()) {
                         debug("PARENT\n");
                         pid_t child = create_backup();
