@@ -13,7 +13,7 @@ INCLUDE_DIR = include
 TARGET = Pacmanist
 
 # Objects variables
-OBJS = game.o display.o board.o parser.o
+OBJS = display.o board.o parser.o client_main.o game.o api.o debug.o server.o
 
 # Dependencies
 display.o = display.h
@@ -22,7 +22,7 @@ parser.o = parser.h
 
 # Object files path
 vpath %.o $(OBJ_DIR)
-vpath %.c $(SRC_DIR)
+vpath %.c $(SRC_DIR) $(SRC_DIR)/client $(SRC_DIR)/server
 
 # Make targets
 all: pacmanist

@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "parser.h"
+#include "debug.h"
 #include "board.h"
 #include <fcntl.h>
 
