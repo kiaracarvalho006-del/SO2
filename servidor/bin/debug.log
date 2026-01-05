@@ -1,0 +1,248 @@
+DIM = 6 x 6
+TEMPO = 200
+PAC = ../../files/p2.p
+MON file: ../../files/m1.m
+Line: XXoXXX
+Line: XoooXX
+Line: XoXoXX
+Line: Xooo@X
+Line: XooooX
+Line: XXXXXX
+Pacman passo: 1
+Pacman Pos = 3 x 1
+Ghost passo: 1
+Ghost Pos = 4 x 1
+Creating threads
+REFRESH
+KEY A
+REFRESH
+REFRESH
+KEY A
+REFRESH
+REFRESH
+KEY A
+REFRESH
+REFRESH
+KEY A
+REFRESH
+REFRESH
+KEY S
+REFRESH
+REFRESH
+KEY S
+REFRESH
+REFRESH
+KEY S
+REFRESH
+REFRESH
+KEY S
+REFRESH
+REFRESH
+KEY G
+CREATE_BACKUP
+PARENT
+Parent process
+[969] Created
+Child process
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
+CREATE_BACKUP
+[969] Only parent process can have a save
+REFRESH
+Creating threads
+REFRESH
+KEY G
