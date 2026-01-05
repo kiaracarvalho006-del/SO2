@@ -11,7 +11,6 @@
 #include <signal.h>
 
 int main(int arc,char *argv[]) {
-    // Código do servidor
     debug("Servidor iniciado...\n");
     // Implementação do servidor aqui
 
@@ -20,6 +19,22 @@ int main(int arc,char *argv[]) {
         return -1;
     }
 
+    DIR* level_dir = opendir(argv[1]);
+        
+    if (level_dir == NULL) {
+        fprintf(stderr, "Failed to open directory: %s\n", argv[1]);
+        return 0;
+    }
+
+    int max_games = atoi(argv[2]);
+    int current_games = 0;
+
+    open_debug_file("debug.log");
+
+    terminal_init();
+
+    bool end_game = false;
+    board_t game_board;
     
 
     return 0;
