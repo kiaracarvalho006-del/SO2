@@ -15,7 +15,7 @@ typedef struct {
 
 int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char const *server_pipe_path);
 
-void pacman_play(char command);
+int pacman_play(char command);
 
 /// @return 0 if the disconnection was successful, 1 otherwise.
 int pacman_disconnect();
