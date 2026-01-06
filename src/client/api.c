@@ -20,8 +20,21 @@ struct Session {
 
 static struct Session session = {.id = -1};
 
+static int make_fifo_if_needed(const char *path) {
+    if (mkfifo(path, 0666) < 0) {
+      if (errno == EEXIST) return 0; // já existe -> ok
+      return -1;                     // erro real
+    }
+    return 0;
+}
+
 int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char const *server_pipe_path) {
-  // TODO - implement me
+  unlink(req_pipe_path);
+  unlink(notif_pipe_path);
+
+  if (make_fifo_if_needed(req_pipe_path)< 0) return 1;
+  if (make_fifo_if_needed(notif_pipe_path)< 0) return 1;
+
   return 0;
 }
 
@@ -32,7 +45,8 @@ void pacman_play(char command) {
 }
 
 int pacman_disconnect() {
-  // TODO - implement me
+  unlink(req_pipe_path);
+  unlink(notif_pipe_path);
   return 0;
 }
 

@@ -9,6 +9,9 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include "debug.h"
+#include "server.h"
+#include "protocol.h"
 
 int main(int arc,char *argv[]) {
     debug("Servidor iniciado...\n");
@@ -19,11 +22,14 @@ int main(int arc,char *argv[]) {
         return -1;
     }
 
-    DIR* level_dir = opendir(argv[1]);
-        
-    if (level_dir == NULL) {
-        fprintf(stderr, "Failed to open directory: %s\n", argv[1]);
-        return 0;
+    const char *level_dir = argv[1];
+    const char *register_pipe = argv[3];
+
+    if (mkfifo(register_pipe, 0666)){
+        if (errno != EEXIST) { 
+            perror("mkfifo");
+            exit(1);
+        }
     }
 
     int max_games = atoi(argv[2]);
