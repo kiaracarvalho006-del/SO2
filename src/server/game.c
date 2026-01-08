@@ -24,47 +24,26 @@ typedef struct {
     int ghost_index;
 } ghost_thread_arg_t;
 
-int thread_shutdown = 0;
-
-int create_backup() {
-    // clear the terminal for process transition
-    terminal_cleanup();
-
-    pid_t child = fork();
-
-    if(child != 0) {
-        if (child < 0) {
-            return -1;
-        }
-
-        return child;
-    } else {
-        debug("[%d] Created\n", getpid());
-
-        return 0;
-    }
-}
-
 void screen_refresh(board_t * game_board, int mode) {
     debug("REFRESH\n");
     draw_board(game_board, mode);
     refresh_screen();     
 }
 
-void* ncurses_thread(void *arg) {
+/**void* ncurses_thread(void *arg) {
     board_t *board = (board_t*) arg;
     sleep_ms(board->tempo / 2);
     while (true) {
         sleep_ms(board->tempo);
         pthread_rwlock_wrlock(&board->state_lock);
-        if (thread_shutdown) {
+        if (sess->shutdown) {
             pthread_rwlock_unlock(&board->state_lock);
             pthread_exit(NULL);
         }
         screen_refresh(board, DRAW_MENU);
         pthread_rwlock_unlock(&board->state_lock);
     }
-}
+}*/
 
 void* pacman_thread(void *arg) {
     session_t *sess = (session_t*) arg;
@@ -74,55 +53,84 @@ void* pacman_thread(void *arg) {
 
     int *retval = malloc(sizeof(int));
 
+    pthread_mutex_lock(&sess->lock);
+    if (sess->shutdown) {
+        pthread_mutex_unlock(&sess->lock);
+        pthread_exit(NULL);
+    }
+    pthread_mutex_unlock(&sess->lock);
+
     while (true) {
         sleep_ms(board->tempo * (1 + pacman->passo));
 
-        command_t* play;
-        command_t c;
-        if (pacman->n_moves == 0) {
-            c.command = get_input();
+        unsigned char op = 0;
 
-            if(c.command == '\0') {
-                continue;
+        if (read_full(sess->req_fd, &op, 1) != 1) {
+            pthread_mutex_lock(&sess->lock);
+            sess->disconnected = 1;  
+            pthread_mutex_unlock(&sess->lock);
+            return NULL;
+        }
+
+        if (op == OP_CODE_DISCONNECT) {
+            pthread_mutex_lock(&sess->lock);
+            sess->disconnected = 1;          
+            *retval = QUIT_GAME;          
+            pthread_mutex_unlock(&sess->lock);
+            return NULL;
+        }
+
+        if (op == OP_CODE_PLAY) {
+            unsigned char cmd = 0;
+            if (read_full(sess->req_fd, &cmd, 1) != 1) {
+                pthread_mutex_lock(&sess->lock);
+                sess->disconnected = 1;
+                pthread_mutex_unlock(&sess->lock);
+                return NULL;
             }
 
-            c.turns = 1;
-            play = &c;
-        }
-        else {
-            play = &pacman->moves[pacman->current_move%pacman->n_moves];
-        }
+            // “G” desativado (ignora)
+            if ((char)cmd == 'G') continue;
 
-        debug("KEY %c\n", play->command);
+            pthread_mutex_lock(&sess->lock);
+            //TODO: tratar comandos concorrentes
+            //sess->last_cmd = (char)cmd;
+            //sess->has_cmd = 1;
+            pthread_mutex_unlock(&sess->lock);
 
-        // QUIT
-        if (play->command == 'Q') {
-            *retval = QUIT_GAME;
-            return (void*) retval;
-        }
+            command_t play;
+            play.command = (char)cmd;
+            
+            debug("KEY %c\n", play.command);
 
-        pthread_rwlock_rdlock(&board->state_lock);
+            // QUIT
+            if (play.command == 'Q') {
+                *retval = QUIT_GAME;
+                return (void*) retval;
+            }
 
-        int result = move_pacman(board, 0, play);
-        if (result == REACHED_PORTAL) {
-            // Next level
-            *retval = NEXT_LEVEL;
-            break;
-        }
+            pthread_rwlock_rdlock(&board->state_lock);
+            int result = move_pacman(board, 0, play);
+            pthread_rwlock_unlock(&board->state_lock);
 
-        if(result == DEAD_PACMAN) {
-            break;
-        }
+            if (result == REACHED_PORTAL) {
+                *retval = NEXT_LEVEL;
+                break;
+            }
 
-        pthread_rwlock_unlock(&board->state_lock);
+            if(result == DEAD_PACMAN) {
+                *retval = QUIT_GAME;
+                break;
+            }
+        }            
     }
-    pthread_rwlock_unlock(&board->state_lock);
     return (void*) retval;
 }
 
 void* ghost_thread(void *arg) {
     ghost_thread_arg_t *ghost_arg = (ghost_thread_arg_t*) arg;
-    board_t *board = ghost_arg->board;
+    board_t *board = &ghost_arg->session->board;
+    session_t *sess = ghost_arg->session;
     int ghost_ind = ghost_arg->ghost_index;
 
     free(ghost_arg);
@@ -132,168 +140,26 @@ void* ghost_thread(void *arg) {
     while (true) {
         sleep_ms(board->tempo * (1 + ghost->passo));
 
-        pthread_rwlock_rdlock(&board->state_lock);
-        if (thread_shutdown) {
-            pthread_rwlock_unlock(&board->state_lock);
+        pthread_mutex_lock(&sess->lock);
+        int stop = sess->shutdown;
+        pthread_mutex_unlock(&sess->lock);
+
+        if (stop) {
             pthread_exit(NULL);
         }
         
+        pthread_rwlock_wrlock(&board->state_lock);
         move_ghost(board, ghost_ind, &ghost->moves[ghost->current_move%ghost->n_moves]);
         pthread_rwlock_unlock(&board->state_lock);
     }
 }
 
-int main(int argc, char** argv) {
-    if (argc != 2) {
-        printf("Usage: %s <level_directory>\n", argv[0]);
-        return -1;
-    }
-
-    // Random seed for any random movements
-    srand((unsigned int)time(NULL));
-
-    DIR* level_dir = opendir(argv[1]);
-        
-    if (level_dir == NULL) {
-        fprintf(stderr, "Failed to open directory: %s\n", argv[1]);
-        return 0;
-    }
-
-    open_debug_file("debug.log");
-
-    terminal_init();
-    
-    int accumulated_points = 0;
-    bool end_game = false;
-    board_t game_board;
-
-    pid_t parent_process = getpid(); // Only the parent process can create backups
-
-    struct dirent* entry;
-    while ((entry = readdir(level_dir)) != NULL && !end_game) {
-        if (entry->d_name[0] == '.') continue;
-
-        char *dot = strrchr(entry->d_name, '.');
-        if (!dot) continue;
-
-        if (strcmp(dot, ".lvl") == 0) {
-            load_level(&game_board, entry->d_name, argv[1], accumulated_points);
-            draw_board(&game_board, DRAW_MENU);
-            refresh_screen();
-
-            while(true) {
-                pthread_t ncurses_tid, pacman_tid;
-                pthread_t *ghost_tids = malloc(game_board.n_ghosts * sizeof(pthread_t));
-
-                thread_shutdown = 0;
-
-                debug("Creating threads\n");
-
-                pthread_create(&pacman_tid, NULL, pacman_thread, (void*) &game_board);
-                for (int i = 0; i < game_board.n_ghosts; i++) {
-                    ghost_thread_arg_t *arg = malloc(sizeof(ghost_thread_arg_t));
-                    arg->board = &game_board;
-                    arg->ghost_index = i;
-                    pthread_create(&ghost_tids[i], NULL, ghost_thread, (void*) arg);
-                }
-                pthread_create(&ncurses_tid, NULL, ncurses_thread, (void*) &game_board);
-
-                int *retval;
-                pthread_join(pacman_tid, (void**)&retval);
-
-                pthread_rwlock_wrlock(&game_board.state_lock);
-                thread_shutdown = 1;
-                pthread_rwlock_unlock(&game_board.state_lock);
-
-                pthread_join(ncurses_tid, NULL);
-                for (int i = 0; i < game_board.n_ghosts; i++) {
-                    pthread_join(ghost_tids[i], NULL);
-                }
-
-                free(ghost_tids);
-
-                int result = *retval;
-                free(retval);
-
-                if(result == NEXT_LEVEL) {
-                    screen_refresh(&game_board, DRAW_WIN);
-                    sleep_ms(game_board.tempo);
-                    break;
-                }
-
-                if(result == QUIT_GAME) {
-                    screen_refresh(&game_board, DRAW_GAME_OVER); 
-                    sleep_ms(game_board.tempo);
-                    end_game = true;
-                    break;
-                }
-      
-                screen_refresh(&game_board, DRAW_MENU); 
-
-                accumulated_points = game_board.pacmans[0].points;      
-            }
-            print_board(&game_board);
-            unload_level(&game_board);
-        }
-    }    
-
-    terminal_cleanup();
-
-    close_debug_file();
-
-    if (closedir(level_dir) == -1) {
-        fprintf(stderr, "Failed to close directory\n");
-        return 0;
-    }
-    return 0;
-}
-
-static void* req_reader_thread(void *arg) {
-  session_t *sess = (session_t*)arg;
-
-  while (1) {
-    unsigned char op = 0;
-
-    if (read_full(sess->req_fd, &op, 1) != 1) {
-        pthread_mutex_lock(&sess->lock);
-        sess->disconnected = 1;                  
-        pthread_mutex_unlock(&sess->lock);
-        return NULL;
-    }
-
-    if (op == OP_CODE_DISCONNECT) {
-        pthread_mutex_lock(&sess->lock);
-        sess->disconnected = 1;                    
-        pthread_mutex_unlock(&sess->lock);
-        return NULL;
-    }
-
-    if (op == OP_CODE_PLAY) {
-        unsigned char cmd = 0;
-        if (read_full(sess->req_fd, &cmd, 1) != 1) {
-            pthread_mutex_lock(&sess->lock);
-            sess->disconnected = 1;
-            pthread_mutex_unlock(&sess->lock);
-            return NULL;
-        }
-
-        // “G” desativado na 2ª parte (ignora)
-        if ((char)cmd == 'G') continue;
-
-        pthread_mutex_lock(&sess->lock);
-        sess->last_cmd = (char)cmd;
-        sess->has_cmd = 1;
-        pthread_mutex_unlock(&sess->lock);
-    }
-  }
-}
-
-static void send_board_update(session_t *sess) {
+int send_board_update(session_t *sess) {
     board_t *board = &sess->board;
     int n = board->width * board->height;
     
     char *buf = malloc((size_t)n);
-    if (!buf) return;
+    if (!buf) return -1;
     
     // snapshot do tabuleiro
     pthread_rwlock_rdlock(&board->state_lock);
@@ -311,20 +177,21 @@ static void send_board_update(session_t *sess) {
     
     // OP_CODE_BOARD: OP(1) + 6 ints + board_data[w*h]
     unsigned char op = OP_CODE_BOARD;
-    if (write_full(sess->notif_fd, &op, 1) < 0) goto cleanup;
-    if (write_full(sess->notif_fd, &w, sizeof(int)) < 0) goto cleanup;
-    if (write_full(sess->notif_fd, &h, sizeof(int)) < 0) goto cleanup;
-    if (write_full(sess->notif_fd, &tempo, sizeof(int)) < 0) goto cleanup;
-    if (write_full(sess->notif_fd, &victory, sizeof(int)) < 0) goto cleanup;
-    if (write_full(sess->notif_fd, &game_over, sizeof(int)) < 0) goto cleanup;
-    if (write_full(sess->notif_fd, &points, sizeof(int)) < 0) goto cleanup;
-    if (write_full(sess->notif_fd, buf, (size_t)n) < 0) goto cleanup;
+    if (write_full(sess->notif_fd, &op, 1) < 0) { free(buf); return -1; }
+    if (write_full(sess->notif_fd, &w, sizeof(int)) < 0) { free(buf); return -1; }
+    if (write_full(sess->notif_fd, &h, sizeof(int)) < 0) { free(buf); return -1; }
+    if (write_full(sess->notif_fd, &tempo, sizeof(int)) < 0) { free(buf); return -1; }
+    if (write_full(sess->notif_fd, &victory, sizeof(int)) < 0) { free(buf); return -1; }
+    if (write_full(sess->notif_fd, &game_over, sizeof(int)) < 0) { free(buf); return -1; }
+    if (write_full(sess->notif_fd, &points, sizeof(int)) < 0) { free(buf); return -1; }
+    if (write_full(sess->notif_fd, buf, (size_t)n) < 0) { free(buf); return -1; }
 
-    cleanup:
-        free(buf);
+    free(buf);
+
+    return 0;
 }
 
-static void send_board_update_thread(session_t *sess){
+static void* send_board_update_thread(void *arg) {
     session_t *sess = (session_t*)arg;
     
     // update inicial
@@ -357,6 +224,164 @@ static void send_board_update_thread(session_t *sess){
     (void)send_board_update(sess);
     return NULL;
 }
+
+static void* session_thread(void *arg) {
+    session_t *sess = (session_t*)arg;
+
+    int accumulated_points = 0;
+    bool end_game = false;
+    board_t *game_board = &sess->board;
+
+    DIR* entry_dir = opendir(sess->board.dirname);
+    
+    struct dirent* entry;
+    while ((entry = readdir(entry_dir)) != NULL && !end_game) {
+        if (entry->d_name[0] == '.') continue;
+
+        char *dot = strrchr(entry->d_name, '.');
+        if (!dot) continue;
+
+        if (strcmp(dot, ".lvl") == 0) {
+            load_level(game_board, entry->d_name, sess->board.dirname, accumulated_points);
+
+            while(true) {
+                pthread_t pacman_tid, send_update_tid;
+                pthread_t *ghost_tids = malloc(game_board->n_ghosts * sizeof(pthread_t));
+
+                sess->shutdown = 0;
+
+                debug("Creating threads\n");
+
+                pthread_create(&pacman_tid, NULL, pacman_thread, (void*) sess);
+                for (int i = 0; i < game_board->n_ghosts; i++) {
+                    ghost_thread_arg_t *arg = malloc(sizeof(ghost_thread_arg_t));
+                    arg->session = sess;
+                    arg->ghost_index = i;
+                    pthread_create(&ghost_tids[i], NULL, ghost_thread, (void*) arg);
+                }
+                //pthread_create(&ncurses_tid, NULL, ncurses_thread, (void*) &game_board);
+
+                pthread_create(&send_update_tid, NULL, send_board_update_thread, (void*)sess);
+
+                int *retval;
+                pthread_join(pacman_tid, (void**)&retval);
+
+                pthread_mutex_lock(&sess->lock);
+                sess->shutdown = 1;
+                pthread_mutex_unlock(&sess->lock);
+
+
+                //pthread_join(ncurses_tid, NULL);
+                for (int i = 0; i < game_board->n_ghosts; i++) {
+                    pthread_join(ghost_tids[i], NULL);
+                }
+                pthread_join(send_update_tid, NULL);
+
+                free(ghost_tids);
+
+                int result = *retval;
+                free(retval);
+
+                if(result == NEXT_LEVEL) {
+                    pthread_mutex_lock(&sess->lock);
+                    sess->victory = 1;
+                    pthread_mutex_unlock(&sess->lock);
+                    break;
+                }
+
+                if(result == QUIT_GAME) {
+                    pthread_mutex_lock(&sess->lock);
+                    sess->game_over = 1;
+                    pthread_mutex_unlock(&sess->lock);
+                    end_game = true;
+                    break;
+                }
+
+                accumulated_points = sess->board.pacmans[0].points;      
+            }
+            unload_level(game_board);
+        }
+    }
+    
+    closedir(entry_dir);
+    return NULL;
+}
+
+int main(int argc,char *argv[]) {
+    debug("Servidor iniciado...\n");
+    // Implementação do servidor aqui
+
+    if (argc != 4) {
+        printf("Usage: %s <level_dir> <max_games> <FIFO_name>\n", argv[0]);
+        return -1;
+    }
+
+    int max_games = atoi(argv[2]);
+    const char *level_dir = argv[1];
+    const char *register_pipe = argv[3];
+    
+
+    if (mkfifo(register_pipe, 0666) < 0){
+        if (errno != EEXIST) { 
+            perror("mkfifo");
+            exit(1);
+        }
+    }
+
+    //int current_games = 0;
+    int op = 0;
+    int result = -1; // Placeholder for connect result
+    char req_pipe[MAX_PIPE_PATH_LENGTH];
+    char notif_pipe[MAX_PIPE_PATH_LENGTH];
+    
+    open_debug_file("debug.log");  
+    debug("Servidor iniciado...\n");
+    
+    int register_fd = open(register_pipe, O_RDONLY);
+
+    if (read_full(register_fd, &op, 1) > 0) {
+        if (op != OP_CODE_CONNECT) {
+            close(register_fd);
+            return -1;
+        }
+        result = 0; // Placeholder for connect result
+        read_full(register_fd, req_pipe, MAX_PIPE_PATH_LENGTH);
+        read_full(register_fd, notif_pipe, MAX_PIPE_PATH_LENGTH);
+    }
+
+    int req_pipe_fd = open(req_pipe, O_RDONLY);
+    int notif_pipe_fd = open(notif_pipe, O_WRONLY);
+
+    unsigned char result_byte = (unsigned char)result;
+    write_full(notif_pipe_fd, &op, 1);   //rever
+    write_full(notif_pipe_fd, &result_byte, 1);
+
+    session_t session;
+    session.req_fd = req_pipe_fd;
+    session.notif_fd = notif_pipe_fd;
+    pthread_t session_tid;
+
+    strncpy(session.board.dirname, level_dir, MAX_FILENAME);
+    session.board.dirname[MAX_FILENAME - 1] = '\0';
+
+    memset(&session, 0, sizeof(session));
+    pthread_mutex_init(&session.lock, NULL);
+
+    pthread_create(&session_tid, NULL, session_thread, (void*)&session);
+
+    pthread_join(session_tid, NULL);  
+
+    close(register_fd);
+    close(req_pipe_fd);
+    close(notif_pipe_fd);
+
+    return 0;
+}
+
+
+
+
+
 
 static void* manager_thread(void *arg) {
     int *register_fd = (int*)arg;
@@ -412,79 +437,4 @@ static void* manager_thread(void *arg) {
     }
     
     return NULL;
-}
-
-static void* session_thread(void *arg) {
-  session_t *sess = (session_t*)arg;
-  int n = sess->board.width * sess->board.height;
-
-  char *buf = malloc((size_t)n);
-  if (!buf) return NULL;
-
-  while (1) {
-    sleep_ms(board->tempo);
-
-    pthread_mutex_lock(&sess.lock);
-    int stop = sess.disconnected;
-    int victory = sess.victory;
-    int game_over = sess.game_over;
-    pthread_mutex_unlock(&sess.lock);
-    if (stop) break;
-
-    // snapshot do tabuleiro
-    pthread_rwlock_rdlock(&board->state_lock);
-    for (int i = 0; i < n; i++) buf[i] = board->board[i].content;
-    int w = board->width, h = board->height;
-    int tempo = board->tempo;
-    int points = board->pacmans[0].points;
-    pthread_rwlock_unlock(&board->state_lock);
-
-    // OP_CODE_BOARD: OP(1) + 6 ints + board_data[w*h]
-    unsigned char op = OP_CODE_BOARD;
-    if (write_full(sess.notif_fd, &op, 1) < 0) break;
-    if (write_full(sess.notif_fd, &w, sizeof(int)) < 0) break;
-    if (write_full(sess.notif_fd, &h, sizeof(int)) < 0) break;
-    if (write_full(sess.notif_fd, &tempo, sizeof(int)) < 0) break;
-    if (write_full(sess.notif_fd, &victory, sizeof(int)) < 0) break;
-    if (write_full(sess.notif_fd, &game_over, sizeof(int)) < 0) break;
-    if (write_full(sess.notif_fd, &points, sizeof(int)) < 0) break;
-    if (write_full(sess.notif_fd, buf, (size_t)n) < 0) break;
-  }
-
-  free(buf);
-  return NULL;
-}
-
-int main(int argc,char *argv[]) {
-    debug("Servidor iniciado...\n");
-    // Implementação do servidor aqui
-
-    if (argc != 4) {
-        printf("Usage: %s <level_dir> <max_games> <FIFO_name>\n", argv[0]);
-        return -1;
-    }
-
-    const char *level_dir = argv[1];
-    const char *register_pipe = argv[3];
-
-    if (mkfifo(register_pipe, 0666) < 0){
-        if (errno != EEXIST) { 
-            perror("mkfifo");
-            exit(1);
-        }
-    }
-
-    
-
-    int max_games = atoi(argv[2]);
-    int current_games = 0;
-    
-    int register_fd = open(register_pipe, O_RDONLY);
-    open_debug_file("debug.log");
-
-    bool end_game = false;
-    board_t game_board;
-    
-
-    return 0;
 }
