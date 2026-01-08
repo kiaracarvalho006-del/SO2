@@ -36,45 +36,44 @@ static int pick_first_level(const char *levels_dir, char level_name[256]) {
   return -1;
 }
 
-static session_t sess;
-
 static void* req_reader_thread(void *arg) {
-  (void)arg;
+  session_t *sess = (session_t*)arg;
+  
   while (1) {
     unsigned char op = 0;
 
-    int read_req = read_full(sess.req_fd, &op, 1);
+    int read_req = read_full(sess->req_fd, &op, 1);
 
     if (read_req <= 0) {
-      pthread_mutex_lock(&sess.lock);
-      sess.disconnected = 1;                  // esta certo???
-      pthread_mutex_unlock(&sess.lock);
+      pthread_mutex_lock(&sess->lock);
+      sess->disconnected = 1;                  // esta certo???
+      pthread_mutex_unlock(&sess->lock);
       return NULL;
     }
 
     if (op == OP_CODE_DISCONNECT) {
-      pthread_mutex_lock(&sess.lock);
-      sess.disconnected = 1;                    // esta certo???
-      pthread_mutex_unlock(&sess.lock);
+      pthread_mutex_lock(&sess->lock);
+      sess->disconnected = 1;                    // esta certo???
+      pthread_mutex_unlock(&sess->lock);
       return NULL;
     }
 
     if (op == OP_CODE_PLAY) {
       unsigned char cmd = 0;
-      if (read_full(sess.req_fd, &cmd, 1) != 1) {
-        pthread_mutex_lock(&sess.lock);
-        sess.disconnected = 1;
-        pthread_mutex_unlock(&sess.lock);
+      if (read_full(sess->req_fd, &cmd, 1) != 1) {
+        pthread_mutex_lock(&sess->lock);
+        sess->disconnected = 1;
+        pthread_mutex_unlock(&sess->lock);
         return NULL;
       }
 
       // “G” desativado na 2ª parte (ignora)
       if ((char)cmd == 'G') continue;
 
-      pthread_mutex_lock(&sess.lock);
-      sess.last_cmd = (char)cmd;
-      sess.has_cmd = 1;
-      pthread_mutex_unlock(&sess.lock);
+      pthread_mutex_lock(&sess->lock);
+      sess->last_cmd = (char)cmd;
+      sess->has_cmd = 1;
+      pthread_mutex_unlock(&sess->lock);
     }
   }
 }

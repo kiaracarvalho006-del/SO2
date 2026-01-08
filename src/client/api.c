@@ -83,8 +83,8 @@ int pacman_connect(const char *req_pipe_path, const char *notif_pipe_path, const
   }
 
   unsigned char ack_op = 0, result = 1;
-  if (read_full(session.notif_pipe, &ack_op, 1) != 1 ||
-      read_full(session.notif_pipe, &result, 1) != 1 ||
+  if (read_full(session.notif_pipe, &ack_op, 1) != 1 || 
+      read_full(session.notif_pipe, &result, 1) != 1 || 
       ack_op != OP_CODE_CONNECT || result != 0) {
     close(session.req_pipe);
     close(session.notif_pipe);

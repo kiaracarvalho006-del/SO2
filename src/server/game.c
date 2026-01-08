@@ -1,6 +1,9 @@
 #include "board.h"
 #include "display.h"
 #include "debug.h"
+#include "common.h"
+#include "protocol.h"
+#include "server.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -17,7 +20,7 @@
 #define CREATE_BACKUP 4
 
 typedef struct {
-    board_t *board;
+    session_t *session;
     int ghost_index;
 } ghost_thread_arg_t;
 
@@ -64,18 +67,14 @@ void* ncurses_thread(void *arg) {
 }
 
 void* pacman_thread(void *arg) {
-    board_t *board = (board_t*) arg;
+    session_t *sess = (session_t*) arg;
+    board_t *board = &sess->board;
 
     pacman_t* pacman = &board->pacmans[0];
 
     int *retval = malloc(sizeof(int));
 
     while (true) {
-        if(!pacman->alive) {
-            *retval = LOAD_BACKUP;
-            return (void*) retval;
-        }
-
         sleep_ms(board->tempo * (1 + pacman->passo));
 
         command_t* play;
@@ -101,11 +100,6 @@ void* pacman_thread(void *arg) {
             *retval = QUIT_GAME;
             return (void*) retval;
         }
-        // FORK
-        if (play->command == 'G') {
-            *retval = CREATE_BACKUP;
-            return (void*) retval;
-        }
 
         pthread_rwlock_rdlock(&board->state_lock);
 
@@ -117,8 +111,6 @@ void* pacman_thread(void *arg) {
         }
 
         if(result == DEAD_PACMAN) {
-            // Restart from child, wait for child, then quit
-            *retval = LOAD_BACKUP;
             break;
         }
 
@@ -229,64 +221,6 @@ int main(int argc, char** argv) {
                     break;
                 }
 
-                if(result == CREATE_BACKUP) {
-                    debug("CREATE_BACKUP\n");
-                    debug("Current PID: %d, Parent PID: %d\n", getpid(), parent_process);
-                    if (parent_process == getpid()) {
-                        debug("PARENT\n");
-                        pid_t child = create_backup();
-                        if (child == -1) {
-                            // failed to fork
-                            debug("[%d] Failed to create backup\n", getpid());
-                            end_game = true;
-                            break;
-                        }
-                        if (child > 0) {
-                            debug("Parent process\n");
-                            int status;
-                            wait(&status);
-
-                            if (WIFEXITED(status)) {
-                                int code = WEXITSTATUS(status);
-                                
-                                if (code == 1) {
-                                    terminal_init();
-                                    debug("[%d] Save Resuming...\n", getpid());
-                                }
-                                else { // End game or error
-                                    end_game = true;
-                                    break;
-                                }
-                            }
-                        } else {
-                            terminal_init();
-                            debug("Child process\n");
-                        }
-
-                    } else {
-                        debug("[%d] Only parent process can have a save\n", getpid());
-                    }
-                }
-
-                if(result == LOAD_BACKUP) {
-                    if(getpid() != parent_process) {
-                        terminal_cleanup();
-                        unload_level(&game_board);
-                        
-                        close_debug_file();
-
-                        if (closedir(level_dir) == -1) {
-                            fprintf(stderr, "Failed to close directory\n");
-                            return 0;
-                        }
-
-                        return 1;
-                    } else {
-                        // No backup process, game over
-                        result = QUIT_GAME;
-                    }
-                }
-
                 if(result == QUIT_GAME) {
                     screen_refresh(&game_board, DRAW_GAME_OVER); 
                     sleep_ms(game_board.tempo);
@@ -311,5 +245,206 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Failed to close directory\n");
         return 0;
     }
+    return 0;
+}
+
+static void* req_reader_thread(void *arg) {
+  session_t *sess = (session_t*)arg;
+
+  while (1) {
+    unsigned char op = 0;
+
+    if (read_full(sess->req_fd, &op, 1) != 1) {
+        pthread_mutex_lock(&sess->lock);
+        sess->disconnected = 1;                  
+        pthread_mutex_unlock(&sess->lock);
+        return NULL;
+    }
+
+    if (op == OP_CODE_DISCONNECT) {
+        pthread_mutex_lock(&sess->lock);
+        sess->disconnected = 1;                    
+        pthread_mutex_unlock(&sess->lock);
+        return NULL;
+    }
+
+    if (op == OP_CODE_PLAY) {
+        unsigned char cmd = 0;
+        if (read_full(sess->req_fd, &cmd, 1) != 1) {
+            pthread_mutex_lock(&sess->lock);
+            sess->disconnected = 1;
+            pthread_mutex_unlock(&sess->lock);
+            return NULL;
+        }
+
+        // “G” desativado na 2ª parte (ignora)
+        if ((char)cmd == 'G') continue;
+
+        pthread_mutex_lock(&sess->lock);
+        sess->last_cmd = (char)cmd;
+        sess->has_cmd = 1;
+        pthread_mutex_unlock(&sess->lock);
+    }
+  }
+}
+
+static void send_board_update(session_t *sess) {
+    board_t *board = &sess->board;
+    int n = board->width * board->height;
+    
+    char *buf = malloc((size_t)n);
+    if (!buf) return;
+    
+    // snapshot do tabuleiro
+    pthread_rwlock_rdlock(&board->state_lock);
+    for (int i = 0; i < n; i++) buf[i] = board->board[i].content;
+    int w = board->width, h = board->height;
+    int tempo = board->tempo;
+    int points = board->pacmans[0].points;
+    pthread_rwlock_unlock(&board->state_lock);
+    
+    pthread_mutex_lock(&sess->lock);
+    int victory, game_over;
+    victory = sess->victory;
+    game_over = sess->game_over;
+    pthread_mutex_unlock(&sess->lock);
+    
+    // OP_CODE_BOARD: OP(1) + 6 ints + board_data[w*h]
+    unsigned char op = OP_CODE_BOARD;
+    if (write_full(sess->notif_fd, &op, 1) < 0) goto cleanup;
+    if (write_full(sess->notif_fd, &w, sizeof(int)) < 0) goto cleanup;
+    if (write_full(sess->notif_fd, &h, sizeof(int)) < 0) goto cleanup;
+    if (write_full(sess->notif_fd, &tempo, sizeof(int)) < 0) goto cleanup;
+    if (write_full(sess->notif_fd, &victory, sizeof(int)) < 0) goto cleanup;
+    if (write_full(sess->notif_fd, &game_over, sizeof(int)) < 0) goto cleanup;
+    if (write_full(sess->notif_fd, &points, sizeof(int)) < 0) goto cleanup;
+    if (write_full(sess->notif_fd, buf, (size_t)n) < 0) goto cleanup;
+
+    cleanup:
+        free(buf);
+}
+
+static void send_board_update_thread(session_t *sess){
+    session_t *sess = (session_t*)arg;
+    
+    // update inicial
+    if (send_board_update(sess) < 0) {
+        pthread_mutex_lock(&sess->lock);
+        sess->disconnected = 1;
+        sess->shutdown = 1;
+        pthread_mutex_unlock(&sess->lock);
+        return NULL;
+    }
+
+    while (1) {
+        pthread_mutex_lock(&sess->lock);
+        int stop = sess->shutdown;
+        pthread_mutex_unlock(&sess->lock);
+        if (stop) break;
+
+        sleep_ms(sess->board.tempo);
+
+        if (send_board_update(sess) < 0) {
+            pthread_mutex_lock(&sess->lock);
+            sess->disconnected = 1;
+            sess->shutdown = 1;
+            pthread_mutex_unlock(&sess->lock);
+            break;
+        }
+    }
+
+    // update final (opcional, mas útil)
+    (void)send_board_update(sess);
+    return NULL;
+}
+
+static void manager_thread() {
+    while (1) {
+        sleep_ms(sess->board.tempo);
+
+        pthread_mutex_lock(&sess->lock);
+        int stop = sess->disconnected;
+        pthread_mutex_unlock(&sess->lock);
+        if (stop) break;
+        // le o fd_registo para novas sessões
+        // cria nova sessão se possível
+        // abre os FIFOs de notificação e requisição
+
+        
+        
+    }
+}
+
+static void* session_thread(void *arg) {
+  session_t *sess = (session_t*)arg;
+  int n = sess->board.width * sess->board.height;
+
+  char *buf = malloc((size_t)n);
+  if (!buf) return NULL;
+
+  while (1) {
+    sleep_ms(board->tempo);
+
+    pthread_mutex_lock(&sess.lock);
+    int stop = sess.disconnected;
+    int victory = sess.victory;
+    int game_over = sess.game_over;
+    pthread_mutex_unlock(&sess.lock);
+    if (stop) break;
+
+    // snapshot do tabuleiro
+    pthread_rwlock_rdlock(&board->state_lock);
+    for (int i = 0; i < n; i++) buf[i] = board->board[i].content;
+    int w = board->width, h = board->height;
+    int tempo = board->tempo;
+    int points = board->pacmans[0].points;
+    pthread_rwlock_unlock(&board->state_lock);
+
+    // OP_CODE_BOARD: OP(1) + 6 ints + board_data[w*h]
+    unsigned char op = OP_CODE_BOARD;
+    if (write_full(sess.notif_fd, &op, 1) < 0) break;
+    if (write_full(sess.notif_fd, &w, sizeof(int)) < 0) break;
+    if (write_full(sess.notif_fd, &h, sizeof(int)) < 0) break;
+    if (write_full(sess.notif_fd, &tempo, sizeof(int)) < 0) break;
+    if (write_full(sess.notif_fd, &victory, sizeof(int)) < 0) break;
+    if (write_full(sess.notif_fd, &game_over, sizeof(int)) < 0) break;
+    if (write_full(sess.notif_fd, &points, sizeof(int)) < 0) break;
+    if (write_full(sess.notif_fd, buf, (size_t)n) < 0) break;
+  }
+
+  free(buf);
+  return NULL;
+}
+
+int main(int argc,char *argv[]) {
+    debug("Servidor iniciado...\n");
+    // Implementação do servidor aqui
+
+    if (argc != 4) {
+        printf("Usage: %s <level_dir> <max_games> <FIFO_name>\n", argv[0]);
+        return -1;
+    }
+
+    const char *level_dir = argv[1];
+    const char *register_pipe = argv[3];
+
+    if (mkfifo(register_pipe, 0666) < 0){
+        if (errno != EEXIST) { 
+            perror("mkfifo");
+            exit(1);
+        }
+    }
+
+    int register_fd = open(register_pipe, O_RDONLY);
+
+    int max_games = atoi(argv[2]);
+    int current_games = 0;
+
+    open_debug_file("debug.log");
+
+    bool end_game = false;
+    board_t game_board;
+    
+
     return 0;
 }
