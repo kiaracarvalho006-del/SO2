@@ -49,7 +49,7 @@ int pacman_connect(const char *req_pipe_path, const char *notif_pipe_path, const
     return 1;
   }
 
-  // abrir FIFO do servidor e enviar CONNECT: OP(1) | req[40] | notif[40]
+  // abrir FIFO do servidor e enviar CONNECT: OP(1) | req | notif
   int reg_fd = open(server_pipe_path, O_WRONLY);
   if (reg_fd < 0) goto fail_fifos;
 
@@ -74,22 +74,11 @@ int pacman_connect(const char *req_pipe_path, const char *notif_pipe_path, const
   session.req_pipe = open(session.req_pipe_path, O_WRONLY);
   if (session.req_pipe < 0) goto fail_fifos;
 
-  // abrir notif e esperar ACK: OP(1) | result(1)
+  // abrir notif
   session.notif_pipe = open(session.notif_pipe_path, O_RDONLY);
   if (session.notif_pipe < 0) {
     close(session.req_pipe);
     session.req_pipe = -1;
-    goto fail_fifos;
-  }
-
-  unsigned char ack_op = 0, result = 1;
-  if (read_full(session.notif_pipe, &ack_op, 1) != 1 || 
-      read_full(session.notif_pipe, &result, 1) != 1 || 
-      ack_op != OP_CODE_CONNECT || result != 0) {
-    close(session.req_pipe);
-    close(session.notif_pipe);
-    session.req_pipe = -1;
-    session.notif_pipe = -1;
     goto fail_fifos;
   }
 

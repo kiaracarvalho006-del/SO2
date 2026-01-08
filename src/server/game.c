@@ -358,21 +358,60 @@ static void send_board_update_thread(session_t *sess){
     return NULL;
 }
 
-static void manager_thread() {
+static void* manager_thread(void *arg) {
+    int *register_fd = (int*)arg;
+    
     while (1) {
-        sleep_ms(sess->board.tempo);
-
-        pthread_mutex_lock(&sess->lock);
-        int stop = sess->disconnected;
-        pthread_mutex_unlock(&sess->lock);
-        if (stop) break;
         // le o fd_registo para novas sessões
+        unsigned char op = 0;
+        char req_pipe[MAX_PIPE_PATH_LENGTH];
+        char notif_pipe[MAX_PIPE_PATH_LENGTH];
+        
+        // Ler OP code
+        if (read_full(*register_fd, &op, 1) != 1) {
+            break;
+        }
+        
+        if (op != OP_CODE_CONNECT) {
+            continue;
+        }
+        
+        // Ler caminhos dos FIFOs
+        if (read_full(*register_fd, req_pipe, MAX_PIPE_PATH_LENGTH) != 1 ||
+            read_full(*register_fd, notif_pipe, MAX_PIPE_PATH_LENGTH) != 1) {
+            break;
+        }
+        
         // cria nova sessão se possível
+        // TODO: verificar se não excedeu max_games
+        session_t *new_sess = malloc(sizeof(session_t));
+        if (!new_sess) {
+            continue;
+        }
+        
+        memset(new_sess, 0, sizeof(session_t));
+        strncpy(new_sess->req_pipe_path, req_pipe, MAX_PIPE_PATH_LENGTH - 1);
+        strncpy(new_sess->notif_pipe_path, notif_pipe, MAX_PIPE_PATH_LENGTH - 1);
+        
         // abre os FIFOs de notificação e requisição
-
+        new_sess->req_fd = open(new_sess->req_pipe_path, O_RDONLY);
+        new_sess->notif_fd = open(new_sess->notif_pipe_path, O_WRONLY);
         
+        // fecha os fifos se não for possível
+        if (new_sess->req_fd < 0 || new_sess->notif_fd < 0) {
+            if (new_sess->req_fd >= 0) close(new_sess->req_fd);
+            if (new_sess->notif_fd >= 0) close(new_sess->notif_fd);
+            free(new_sess);
+            continue;
+        }
         
+        pthread_mutex_init(&new_sess->lock, NULL);
+        
+        // TODO: criar threads para esta sessão (req_reader_thread, send_board_update_thread)
+        // TODO: adicionar à lista de sessões ativas
     }
+    
+    return NULL;
 }
 
 static void* session_thread(void *arg) {
@@ -435,11 +474,12 @@ int main(int argc,char *argv[]) {
         }
     }
 
-    int register_fd = open(register_pipe, O_RDONLY);
+    
 
     int max_games = atoi(argv[2]);
     int current_games = 0;
-
+    
+    int register_fd = open(register_pipe, O_RDONLY);
     open_debug_file("debug.log");
 
     bool end_game = false;
