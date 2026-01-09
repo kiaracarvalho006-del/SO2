@@ -292,7 +292,7 @@ static void* manager_thread(void *arg) {
     
     while (1) {
         client_con_req_t con_req;
-        mem_set(&con_req, 0, sizeof(con_req));
+        memset(&con_req, 0, sizeof(con_req));
 
         // le o fd_registo para novas sessões
         unsigned char op = 0; 

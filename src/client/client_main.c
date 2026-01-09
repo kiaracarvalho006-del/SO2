@@ -16,6 +16,8 @@ Board board;
 bool stop_execution = false;
 int tempo;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond_var = PTHREAD_COND_INITIALIZER;
+bool board_updated = false;
 
 static void *receiver_thread(void *arg) {
     (void)arg;
@@ -31,14 +33,18 @@ static void *receiver_thread(void *arg) {
             draw_board_client(board);
             refresh_screen();
             stop_execution = true;
+            pthread_cond_broadcast(&cond_var);
             pthread_mutex_unlock(&mutex);
             break;
         }
 
         // Novo board válido - atualizar a global
         pthread_mutex_lock(&mutex);
+        if (board.data) free(board.data);
         board = new_board;
         tempo = new_board.tempo;
+        board_updated = true;
+        pthread_cond_broadcast(&cond_var);
         pthread_mutex_unlock(&mutex);
 
         draw_board_client(board);
@@ -50,6 +56,7 @@ static void *receiver_thread(void *arg) {
             refresh_screen();
             pthread_mutex_lock(&mutex);
             stop_execution = true;
+            pthread_cond_broadcast(&cond_var);
             pthread_mutex_unlock(&mutex);
             break;
         }
@@ -101,6 +108,13 @@ int main(int argc, char *argv[]) {
 
     terminal_init();
     set_timeout(500);
+
+    pthread_mutex_lock(&mutex);
+    while (!board_updated && !stop_execution) {
+        pthread_cond_wait(&cond_var, &mutex);
+    }
+    pthread_mutex_unlock(&mutex);
+
     draw_board_client(board);
     refresh_screen();
 
@@ -140,7 +154,20 @@ int main(int argc, char *argv[]) {
             int wait_for = tempo;
             pthread_mutex_unlock(&mutex);
 
-            sleep_ms(wait_for);
+            //sleep_ms(wait_for);
+
+            int slept = 0;
+            while (slept < wait_for) {
+                pthread_mutex_lock(&mutex);
+                bool stop = stop_execution;
+                pthread_mutex_unlock(&mutex);
+                if (stop) break;
+
+                int chunk = 10;
+                if (wait_for - slept < chunk) chunk = wait_for - slept;
+                sleep_ms(chunk);
+                slept += chunk;
+            }
             
         } else {
             // Interactive input
@@ -167,6 +194,11 @@ int main(int argc, char *argv[]) {
     pthread_join(receiver_thread_id, NULL);
 
     draw_board_client(board);
+
+    pthread_mutex_lock(&mutex);
+    if (board.data) free(board.data);
+    board.data = NULL;
+    pthread_mutex_unlock(&mutex);
 
     if (cmd_fp)
         fclose(cmd_fp);
