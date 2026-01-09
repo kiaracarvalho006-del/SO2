@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 #include <pthread.h>
 #include <errno.h>
+#include <signal.h>
 
 #define CONTINUE_PLAY 0
 #define NEXT_LEVEL 1
@@ -93,15 +94,16 @@ void* pacman_thread(void *arg) {
             pthread_mutex_lock(&sess->lock);
             sess->disconnected = 1;  
             pthread_mutex_unlock(&sess->lock);
-            return NULL;
+            *retval = QUIT_GAME;
+            return (void*) retval;
         }
 
         if (op == OP_CODE_DISCONNECT) {
             pthread_mutex_lock(&sess->lock);
             sess->disconnected = 1;          
-            *retval = QUIT_GAME;          
             pthread_mutex_unlock(&sess->lock);
-            return NULL;
+            *retval = QUIT_GAME;
+            return (void*) retval;
         }
 
         if (op == OP_CODE_PLAY) {
@@ -110,17 +112,12 @@ void* pacman_thread(void *arg) {
                 pthread_mutex_lock(&sess->lock);
                 sess->disconnected = 1;
                 pthread_mutex_unlock(&sess->lock);
-                return NULL;
+                *retval = QUIT_GAME;
+                return (void*) retval;
             }
 
             // “G” desativado (ignora)
             if ((char)cmd == 'G') continue;
-
-            pthread_mutex_lock(&sess->lock);
-            //TODO: tratar comandos concorrentes
-            //sess->last_cmd = (char)cmd;
-            //sess->has_cmd = 1;
-            pthread_mutex_unlock(&sess->lock);
 
             command_t play;
             play.command = (char)cmd;
@@ -309,8 +306,8 @@ static void* manager_thread(void *arg) {
         }
         
         // Ler caminhos dos FIFOs
-        if (read_full(*register_fd, con_req.req_pipe_path, MAX_PIPE_PATH_LENGTH) != MAX_PIPE_PATH_LENGTH ||
-            read_full(*register_fd, con_req.notif_pipe_path, MAX_PIPE_PATH_LENGTH) != MAX_PIPE_PATH_LENGTH) {
+        if (read_full(*register_fd, con_req.req_pipe_path, MAX_PIPE_PATH_LENGTH) != 1 ||
+            read_full(*register_fd, con_req.notif_pipe_path, MAX_PIPE_PATH_LENGTH) != 1) {
             debug("Failed to read pipe paths in manager_thread\n");
             break;
         }
@@ -383,6 +380,14 @@ static void run_session_game(session_t *sess) {
                 int *retval = NULL;
                 pthread_join(pacman_tid, (void**)&retval);
 
+                int result = QUIT_GAME;
+                if (retval) {
+                    result = *retval;
+                    free(retval);
+                } else {
+                    debug("Pacman thread returned NULL\n");
+                }
+
                 pthread_mutex_lock(&sess->lock);
                 sess->shutdown = 1;
                 pthread_mutex_unlock(&sess->lock);
@@ -395,9 +400,6 @@ static void run_session_game(session_t *sess) {
                 pthread_join(send_update_tid, NULL);
 
                 free(ghost_tids);
-
-                int result = *retval;
-                free(retval);
 
                 if(result == NEXT_LEVEL) {
                     pthread_mutex_lock(&sess->lock);
@@ -413,7 +415,6 @@ static void run_session_game(session_t *sess) {
                     debug("Game over set to 1\n");
                     pthread_mutex_unlock(&sess->lock);
                     end_game = true;
-                    send_board_update(sess);
                     break;
                 }
 
@@ -422,8 +423,6 @@ static void run_session_game(session_t *sess) {
             unload_level(game_board);
         }
     }   
-    // Enviar board final com victory flag antes de sair
-    send_board_update(sess);
     closedir(entry_dir);
 }
 
@@ -499,6 +498,8 @@ static void* session_thread(void *arg) {
 }
 
 int main(int argc,char *argv[]) {
+    signal(SIGPIPE, SIG_IGN); // ignorar SIGPIPE
+
     if (argc != 4) {
         printf("Usage: %s <level_dir> <max_games> <FIFO_name>\n", argv[0]);
         return -1;

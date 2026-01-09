@@ -2,15 +2,14 @@ Received op=4
 Received op=4
 Command: A
 Received op=4
-Received op=4
 Command: A
+Received op=4
+Command:  
 Received op=4
 Command: S
 Received op=4
-Received op=4
 Command: S
 Received op=4
-Received op=4
 Command: D
 Received op=4
 Command: D
@@ -18,62 +17,25 @@ Received op=4
 Command: D
 Received op=4
 Received op=4
-Received op=4
-Received op=4
-Received op=4
-Received op=4
-Received op=4
+Command: D
 Command: D
 Received op=4
 Received op=4
+Command:  
 Received op=4
 Command: D
 Received op=4
 Command: D
 Received op=4
-Received op=4
 Command: D
 Received op=4
-Received op=4
-Received op=4
-Received op=4
-Received op=4
-Command: S
-Received op=4
-Received op=4
-Received op=4
-Command: S
-Received op=4
+Command: D
 Received op=4
 Command: A
 Received op=4
 Received op=4
-Received op=4
 Command: A
-Received op=4
-Received op=4
-Received op=4
-Command: A
-Received op=4
-Received op=4
-Received op=4
-Received op=4
-Command: A
-Received op=4
-Received op=4
-Received op=4
-Received op=4
-Command: W
-Received op=4
-Received op=4
-Received op=4
-Received op=4
-Received op=4
-Received op=4
-Command: A
-Received op=4
-Received op=4
-Received op=4
-Game ended (game_over=1, victory=0)
+EOF or error reading op; stopping client receiver
+EOF received, stopping execution
 Returning receiver thread...
-Main thread stopping execution
+Game ended, waiting 2 seconds before cleanup...

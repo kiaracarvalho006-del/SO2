@@ -1,1 +1,101 @@
 Servidor iniciado...
+FIFO de registo criado: /tmp/registo
+[HOST] CONNECT req=/tmp/1_request notif=/tmp/1_notification
+Session thread waiting for new connection...
+Session thread got new connection: req=/tmp/1_request notif=/tmp/1_notification
+Session thread waiting for new connection...
+Pipes opened successfully for session
+Starting session game...
+Checking file: .
+Checking file: ..
+Checking file: m1.m
+Checking file: m2.m
+Checking file: m3.m
+Checking file: p1.p
+Checking file: p2.p
+Checking file: prim.lvl
+DIM = 6 x 6
+TEMPO = 200
+PAC = files/p2.p
+MON file: files/m1.m
+Line: XXoXXX
+Line: XoooXX
+Line: XoXoXX
+Line: Xooo@X
+Line: XooooX
+Line: XXXXXX
+Pacman passo: 0
+Pacman Pos = 3 x 1
+Ghost passo: 1
+Ghost Pos = 4 x 1
+Creating threads
+Threads created
+Sending initial board update
+KEY A
+KEY A
+KEY S
+Game over set to 1
+Session ended, waiting for next connection...
+Session thread waiting for new connection...
+[HOST] CONNECT req=/tmp/2_request notif=/tmp/2_notification
+Session thread got new connection: req=/tmp/2_request notif=/tmp/2_notification
+Pipes opened successfully for session
+Starting session game...
+Checking file: .
+Checking file: ..
+Checking file: m1.m
+Checking file: m2.m
+Checking file: m3.m
+Checking file: p1.p
+Checking file: p2.p
+Checking file: prim.lvl
+DIM = 6 x 6
+TEMPO = 200
+PAC = files/p2.p
+MON file: files/m1.m
+Line: XXoXXX
+Line: XoooXX
+Line: XoXoXX
+Line: Xooo@X
+Line: XooooX
+Line: XXXXXX
+Pacman passo: 0
+Pacman Pos = 3 x 1
+Ghost passo: 1
+Ghost Pos = 4 x 1
+Creating threads
+Threads created
+Sending initial board update
+KEY A
+KEY A
+KEY  
+KEY S
+KEY S
+KEY D
+KEY D
+KEY D
+Checking file: sec.lvl
+DIM = 10 x 8
+TEMPO = 100
+MON file: files/m3.m
+Line: XXXXXXXXXX
+Line: XXooooo@XX
+Line: XoXXXXooXX
+Line: XooooooXXX
+Line: XoXXXooooX
+Line: XooooXXXXX
+Line: XooooooooX
+Line: XXXXXXXXXX
+Ghost passo: 1
+Ghost Pos = 2 x 2
+Creating threads
+Threads created
+Sending initial board update
+KEY D
+KEY D
+KEY  
+KEY D
+KEY D
+KEY D
+Session ended, waiting for next connection...
+Session thread waiting for new connection...

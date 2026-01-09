@@ -126,8 +126,7 @@ int main(int argc, char *argv[]) {
         pthread_mutex_lock(&mutex);
         if (stop_execution){
             pthread_mutex_unlock(&mutex);
-            terminal_cleanup();
-            debug("Main thread stopping execution\n");
+            debug("Main thread detected game end\n");
             break;
         }
         pthread_mutex_unlock(&mutex);
@@ -152,7 +151,10 @@ int main(int argc, char *argv[]) {
             // Wait for tempo, to not overflow pipe with requests
             pthread_mutex_lock(&mutex);
             int wait_for = tempo;
+            int should_stop = stop_execution;
             pthread_mutex_unlock(&mutex);
+
+            if (should_stop) break;
 
             //sleep_ms(wait_for);
 
@@ -168,6 +170,11 @@ int main(int argc, char *argv[]) {
                 sleep_ms(chunk);
                 slept += chunk;
             }
+
+            pthread_mutex_lock(&mutex);
+            should_stop = stop_execution;
+            pthread_mutex_unlock(&mutex);
+            if (should_stop) break;
             
         } else {
             // Interactive input
@@ -180,6 +187,7 @@ int main(int argc, char *argv[]) {
 
         if (command == 'Q') {
             debug("Client pressed 'Q', quitting game\n");
+            pacman_disconnect();
             break;
         }
 
@@ -189,9 +197,14 @@ int main(int argc, char *argv[]) {
 
     }
 
-    pacman_disconnect();
+    debug("Game ended, waiting 2 seconds before cleanup...\n");
+    sleep_ms(board.tempo);
 
     pthread_join(receiver_thread_id, NULL);
+
+    terminal_cleanup();
+
+    pacman_disconnect();
 
     draw_board_client(board);
 
@@ -204,8 +217,6 @@ int main(int argc, char *argv[]) {
         fclose(cmd_fp);
 
     pthread_mutex_destroy(&mutex);
-
-    terminal_cleanup();
 
     return 0;
 }
