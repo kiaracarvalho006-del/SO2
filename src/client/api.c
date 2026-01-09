@@ -143,11 +143,19 @@ Board receive_board_update(void) {
   Board board;
   memset(&board, 0, sizeof(Board));
   
-  if (session.notif_pipe < 0) return board;
+  if (session.notif_pipe < 0) {
+    debug("Notification pipe not open\n");
+    return board;
+  }
 
   unsigned char op = 0;
-  if (read_full(session.notif_pipe, &op, 1) != 1) return board;
-  if (op != OP_CODE_BOARD) return board;
+  if (read_full(session.notif_pipe, &op, 1) != 1) {
+    debug("EOF or error reading op; stopping client receiver\n");
+    board.data = NULL;
+    return board;
+  }
+  debug("Received op=%d\n", op);
+  if (op != OP_CODE_BOARD) { debug("Invalid op code, expected %d\n", OP_CODE_BOARD); return board; }
 
   if (read_full(session.notif_pipe, &board.width, sizeof(int)) != 1) return board;
   if (read_full(session.notif_pipe, &board.height, sizeof(int)) != 1) return board;
@@ -159,7 +167,9 @@ Board receive_board_update(void) {
   if (n <= 0) return board;
 
   board.data = (char*)malloc((size_t)(n + 1));
-  if (!board.data) return board;
+  if (!board.data) {
+    return board;
+  }
 
   if (read_full(session.notif_pipe, board.data, (size_t)n) != 1) {
     free(board.data);

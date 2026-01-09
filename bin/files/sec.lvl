@@ -1,5 +1,5 @@
 # DIM: tamanho da matriz
-DIM 8 10
+DIM 10 8
 # TEMPO: tempo por jogada
 TEMPO 100
 MON m3.m

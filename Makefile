@@ -1,7 +1,7 @@
 # Compiler variables
 CC = gcc
 CFLAGS = -g -Wall -Wextra -Werror -std=c17 -D_POSIX_C_SOURCE=200809L
-LDFLAGS = -lncurses
+LDFLAGS = -lncurses -pthread
 
 # Directory variables
 SRC_DIR = src
@@ -9,11 +9,18 @@ OBJ_DIR = obj
 BIN_DIR = bin
 INCLUDE_DIR = include
 
-# executable 
-TARGET = Pacmanist
+# executables
+CLIENT_TARGET = Pacmanist
+SERVER_TARGET = PacmanServer
 
-# Objects variables
-OBJS = display.o board.o parser.o client_main.o game.o api.o debug.o server.o
+# Common objects
+COMMON_OBJS = common.o debug.o
+
+# Client objects
+CLIENT_OBJS = client_main.o api.o display.o $(COMMON_OBJS)
+
+# Server objects  
+SERVER_OBJS = game.o board.o parser.o display.o $(COMMON_OBJS)
 
 # Dependencies
 display.o = display.h
@@ -22,33 +29,43 @@ parser.o = parser.h
 
 # Object files path
 vpath %.o $(OBJ_DIR)
-vpath %.c $(SRC_DIR) $(SRC_DIR)/client $(SRC_DIR)/server
+vpath %.c $(SRC_DIR)/client $(SRC_DIR)/server $(SRC_DIR)/common
 
 # Make targets
-all: pacmanist
+all: client server
 
-pacmanist: $(BIN_DIR)/$(TARGET)
+client: $(BIN_DIR)/$(CLIENT_TARGET)
 
-$(BIN_DIR)/$(TARGET): $(OBJS) | folders
-	$(CC) $(CFLAGS) $(SLEEP) $(addprefix $(OBJ_DIR)/,$(OBJS)) -o $@ $(LDFLAGS)
+server: $(BIN_DIR)/$(SERVER_TARGET)
+
+$(BIN_DIR)/$(CLIENT_TARGET): $(CLIENT_OBJS) | folders
+	$(CC) $(CFLAGS) $(addprefix $(OBJ_DIR)/,$(CLIENT_OBJS)) -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/$(SERVER_TARGET): $(SERVER_OBJS) | folders
+	$(CC) $(CFLAGS) $(addprefix $(OBJ_DIR)/,$(SERVER_OBJS)) -o $@ $(LDFLAGS)
 
 # dont include LDFLAGS in the end, to allow compilation on macos
 %.o: %.c $($@) | folders
 	$(CC) -I $(INCLUDE_DIR) $(CFLAGS) -o $(OBJ_DIR)/$@ -c $<
 
-# run the program
-run: pacmanist
-	@./$(BIN_DIR)/$(TARGET) $(ARGS)  # to run use: make run ARGS="<folder>"
+# run the client
+run-client: client
+	@./$(BIN_DIR)/$(CLIENT_TARGET) $(ARGS)
+
+# run the server
+run-server: server
+	@./$(BIN_DIR)/$(SERVER_TARGET) $(ARGS)
 
 # Create folders
 folders:
 	mkdir -p $(OBJ_DIR)
 	mkdir -p $(BIN_DIR)
 
-# Clean object files and executable
+# Clean object files and executables
 clean:
 	rm -f $(OBJ_DIR)/*.o
-	rm -f $(BIN_DIR)/$(TARGET)
+	rm -f $(BIN_DIR)/$(CLIENT_TARGET)
+	rm -f $(BIN_DIR)/$(SERVER_TARGET)
 
-# indentify targets that do not create files
-.PHONY: all clean run folders
+# identify targets that do not create files
+.PHONY: all clean client server run-client run-server folders

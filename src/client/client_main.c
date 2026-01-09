@@ -22,21 +22,37 @@ static void *receiver_thread(void *arg) {
 
     while (true) {
         
-        Board board = receive_board_update();
+        Board new_board = receive_board_update();
 
-        if (!board.data || board.game_over == 1){
+        if (!new_board.data) {
+            debug("EOF received, stopping execution\n");
+            // EOF - fazer draw com a global que tem o último estado válido
             pthread_mutex_lock(&mutex);
+            draw_board_client(board);
+            refresh_screen();
             stop_execution = true;
             pthread_mutex_unlock(&mutex);
             break;
         }
 
+        // Novo board válido - atualizar a global
         pthread_mutex_lock(&mutex);
-        tempo = board.tempo;
+        board = new_board;
+        tempo = new_board.tempo;
         pthread_mutex_unlock(&mutex);
 
         draw_board_client(board);
         refresh_screen();
+
+        if (new_board.game_over == 1 || new_board.victory == 1) {
+            debug("Game ended (game_over=%d, victory=%d)\n", new_board.game_over, new_board.victory);
+            draw_board_client(board);
+            refresh_screen();
+            pthread_mutex_lock(&mutex);
+            stop_execution = true;
+            pthread_mutex_unlock(&mutex);
+            break;
+        }
     }
 
     debug("Returning receiver thread...\n");
@@ -96,6 +112,8 @@ int main(int argc, char *argv[]) {
         pthread_mutex_lock(&mutex);
         if (stop_execution){
             pthread_mutex_unlock(&mutex);
+            terminal_cleanup();
+            debug("Main thread stopping execution\n");
             break;
         }
         pthread_mutex_unlock(&mutex);
@@ -147,6 +165,8 @@ int main(int argc, char *argv[]) {
     pacman_disconnect();
 
     pthread_join(receiver_thread_id, NULL);
+
+    draw_board_client(board);
 
     if (cmd_fp)
         fclose(cmd_fp);

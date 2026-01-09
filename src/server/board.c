@@ -9,8 +9,6 @@
 #include <stdarg.h>
 #include <pthread.h>
 
-FILE * debugfile;
-
 // Helper private function to find and kill pacman at specific position
 static int find_and_kill_pacman(board_t* board, int new_x, int new_y) {
     for (int p = 0; p < board->n_pacmans; p++) {
@@ -32,13 +30,6 @@ static inline int get_board_index(board_t* board, int x, int y) {
 // Helper private function for checking valid position
 static inline int is_valid_position(board_t* board, int x, int y) {
     return (x >= 0 && x < board->width) && (y >= 0 && y < board->height); // Inside of the board boundaries
-}
-
-void sleep_ms(int milliseconds) {
-    struct timespec ts;
-    ts.tv_sec = milliseconds / 1000;
-    ts.tv_nsec = (milliseconds % 1000) * 1000000;
-    nanosleep(&ts, NULL);
 }
 
 int move_pacman(board_t* board, int pacman_index, command_t* command) {
@@ -467,8 +458,8 @@ int load_ghost(board_t* board) {
     return 0;
 }
 
-int load_level(board_t *board, char *filename, char* dirname, int points) {
-
+int load_level(session_t *sess, char *filename, char* dirname, int points) {
+    board_t * board = &sess->board;    
     if (read_level(board, filename, dirname) < 0) {
         printf("Failed to load level\n");
         return -1;
@@ -487,7 +478,7 @@ int load_level(board_t *board, char *filename, char* dirname, int points) {
     for (int i = 0; i < board->height * board->width; i++) {
         pthread_mutex_init(&board->board[i].lock, NULL);
     }
-
+    
     //print_board(board);
     return 0;
 }
@@ -500,23 +491,6 @@ void unload_level(board_t * board) {
     free(board->board);
     free(board->pacmans);
     free(board->ghosts);
-}
-
-void open_debug_file(char *filename) {
-    debugfile = fopen(filename, "w");
-}
-
-void close_debug_file() {
-    fclose(debugfile);
-}
-
-void debug(const char * format, ...) {
-    va_list args;
-    va_start(args, format);
-    vfprintf(debugfile, format, args);
-    va_end(args);
-
-    fflush(debugfile);
 }
 
 void print_board(board_t *board) {

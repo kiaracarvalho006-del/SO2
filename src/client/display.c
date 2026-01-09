@@ -1,9 +1,24 @@
 #include "display.h"
 #include "board.h"
 #include "api.h"
+#include "debug.h"
 #include <stdlib.h>
 #include <ctype.h>
 
+/**void* ncurses_thread(void *arg) {
+    board_t *board = (board_t*) arg;
+    sleep_ms(board->tempo / 2);
+    while (true) {
+        sleep_ms(board->tempo);
+        pthread_rwlock_wrlock(&board->state_lock);
+        if (sess->shutdown) {
+            pthread_rwlock_unlock(&board->state_lock);
+            pthread_exit(NULL);
+        }
+        screen_refresh(board, DRAW_MENU);
+        pthread_rwlock_unlock(&board->state_lock);
+    }
+}*/
 
 int terminal_init() {
     // Initialize ncurses mode
@@ -56,7 +71,7 @@ void draw_board_client(Board board) {
     mvprintw(0, 0, "=== PACMAN GAME ===");
     if (board.game_over) {
         mvprintw(1, 0, " GAME OVER ");
-    } else if (board.victory) {
+    } else if (board.victory == 1) {
         mvprintw(1, 0, " VICTORY ");
     } else {
         mvprintw(1, 0, " Use W/A/S/D to move | Q to quit");
@@ -124,7 +139,7 @@ void draw_board_client(Board board) {
 
     // Draw score/status at the bottom
     attron(COLOR_PAIR(5));
-    mvprintw(start_row + board.height + 1, 0, "Points: %d",
+    mvprintw(start_row + board.height + 1, 0, "Points: %d\n",
              board.accumulated_points);
     attroff(COLOR_PAIR(5));
 }
