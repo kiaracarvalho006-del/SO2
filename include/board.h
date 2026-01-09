@@ -6,7 +6,11 @@
 #define MAX_FILENAME 256
 #define MAX_GHOSTS 25
 
+#define MAX_PENDING_CLIENTS 100  // tamanho máximo da fila
+
 #include <pthread.h>
+#include <semaphore.h>
+#include "protocol.h"
 
 typedef enum {
     REACHED_PORTAL = 1,
@@ -80,6 +84,21 @@ typedef struct {
 
   int shutdown;     // global stop flag for session threads
 } session_t;
+
+typedef struct {
+    char req_pipe_path[MAX_PIPE_PATH_LENGTH + 1];
+    char notif_pipe_path[MAX_PIPE_PATH_LENGTH + 1];
+} client_con_req_t;
+
+typedef struct {
+    client_con_req_t requests[MAX_PENDING_CLIENTS];
+    int head;   // índice do primeiro pedido na fila
+    int tail;   // índice do próximo slot livre
+    int count;  // número de pedidos atualmente na fila
+    pthread_mutex_t mutex;
+    sem_t sem_empty; // controla slots disponíveis
+    sem_t sem_full;  // controla pedidos disponíveis
+} client_queue_t;
 
 /*Move pacman/monster in a certain direction on the board must check for boundaries, walls and other monsters
 Maybe do 1 function for pacman and 1 for monsters if required

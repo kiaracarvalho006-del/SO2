@@ -27,26 +27,47 @@ typedef struct {
     int ghost_index;
 } ghost_thread_arg_t;
 
-void screen_refresh(board_t * game_board, int mode) {
-    debug("REFRESH\n");
-    draw_board(game_board, mode);
-    refresh_screen();     
+typedef struct {
+    session_t *session;
+    const char* level_dir;
+} session_thread_arg_t;
+
+client_queue_t queue; // variavel global da fila de pedidos
+
+static void queue_init(client_queue_t* q) {
+    q->head = 0;
+    q->tail = 0;
+    q->count = 0;
+    pthread_mutex_init(&q->mutex, NULL);
+    sem_init(&q->sem_empty, 0, MAX_PENDING_CLIENTS);     // todos os slots estão vazios
+    sem_init(&q->sem_full, 0, 0);                        // nenhum pedido disponível
 }
 
-/**void* ncurses_thread(void *arg) {
-    board_t *board = (board_t*) arg;
-    sleep_ms(board->tempo / 2);
-    while (true) {
-        sleep_ms(board->tempo);
-        pthread_rwlock_wrlock(&board->state_lock);
-        if (sess->shutdown) {
-            pthread_rwlock_unlock(&board->state_lock);
-            pthread_exit(NULL);
-        }
-        screen_refresh(board, DRAW_MENU);
-        pthread_rwlock_unlock(&board->state_lock);
-    }
-}*/
+static void queue_add(client_queue_t* q, client_con_req_t* req) {
+    sem_wait(&q->sem_empty);
+    pthread_mutex_lock(&q->mutex);
+
+    q->requests[q->tail] = *req;
+    q->tail = (q->tail + 1) % MAX_PENDING_CLIENTS;
+    q->count++;
+
+    pthread_mutex_unlock(&q->mutex);
+    sem_post(&q->sem_full);
+}
+
+static client_con_req_t queue_remove(client_queue_t* q) {
+    sem_wait(&q->sem_full);
+    pthread_mutex_lock(&q->mutex);
+
+    client_con_req_t req = q->requests[q->head];
+    q->head = (q->head + 1) % MAX_PENDING_CLIENTS;
+    q->count--;
+
+    pthread_mutex_unlock(&q->mutex);
+    sem_post(&q->sem_empty);
+
+    return req;
+}
 
 void* pacman_thread(void *arg) {
     session_t *sess = (session_t*) arg;
@@ -112,7 +133,7 @@ void* pacman_thread(void *arg) {
                 return (void*) retval;
             }
 
-            pthread_rwlock_rdlock(&board->state_lock);
+            pthread_rwlock_wrlock(&board->state_lock);
             int result = move_pacman(board, 0, &play);
             pthread_rwlock_unlock(&board->state_lock);
 
@@ -266,14 +287,55 @@ static void* send_board_update_thread(void *arg) {
     return NULL;
 }
 
-static void* session_thread(void *arg) {
-    session_t *sess = (session_t*)arg;
+static void* manager_thread(void *arg) {
+    int *register_fd = (int*) arg;                    
+    
+    while (1) {
+        client_con_req_t con_req;
+        mem_set(&con_req, 0, sizeof(con_req));
 
+        // le o fd_registo para novas sessões
+        unsigned char op = 0; 
+                
+        // Ler OP code
+        if (read_full(*register_fd, &op, 1) != 1) {
+            debug("Failed to read op code in manager_thread\n");
+            break;
+        }
+        
+        if (op != OP_CODE_CONNECT) {
+            debug("Invalid op code in manager_thread: %d\n", op);
+            continue;
+        }
+        
+        // Ler caminhos dos FIFOs
+        if (read_full(*register_fd, con_req.req_pipe_path, MAX_PIPE_PATH_LENGTH) != MAX_PIPE_PATH_LENGTH ||
+            read_full(*register_fd, con_req.notif_pipe_path, MAX_PIPE_PATH_LENGTH) != MAX_PIPE_PATH_LENGTH) {
+            debug("Failed to read pipe paths in manager_thread\n");
+            break;
+        }
+
+        con_req.req_pipe_path[MAX_PIPE_PATH_LENGTH - 1] = '\0';
+        con_req.notif_pipe_path[MAX_PIPE_PATH_LENGTH - 1] = '\0';
+        debug("[HOST] CONNECT req=%s notif=%s\n", con_req.req_pipe_path, con_req.notif_pipe_path);
+
+        queue_add(&queue, &con_req);
+    }
+    
+    return NULL;
+}
+
+static void run_session_game(session_t *sess) {
     int accumulated_points = 0;
     bool end_game = false;
     board_t *game_board = &sess->board;
 
     DIR* entry_dir = opendir(sess->board.dirname);
+    if (!entry_dir) {
+        debug("Failed to open levels directory: %s\n", sess->board.dirname);
+        return;
+    }
+
     struct dirent* entry;
 
     while ((entry = readdir(entry_dir)) != NULL && !end_game) {
@@ -293,24 +355,32 @@ static void* session_thread(void *arg) {
             while(true) {
                 pthread_t pacman_tid, send_update_tid;
                 pthread_t *ghost_tids = malloc(game_board->n_ghosts * sizeof(pthread_t));
+                if (!ghost_tids) {
+                    debug("Failed to allocate ghost_tids\n");
+                    end_game = true;
+                    break;
+                }
 
+                pthread_mutex_lock(&sess->lock);
                 sess->shutdown = 0;
+                pthread_mutex_unlock(&sess->lock);
 
                 debug("Creating threads\n");
 
                 pthread_create(&pacman_tid, NULL, pacman_thread, (void*) sess);
+
                 for (int i = 0; i < game_board->n_ghosts; i++) {
                     ghost_thread_arg_t *arg = malloc(sizeof(ghost_thread_arg_t));
                     arg->session = sess;
                     arg->ghost_index = i;
                     pthread_create(&ghost_tids[i], NULL, ghost_thread, (void*) arg);
                 }
-                //pthread_create(&ncurses_tid, NULL, ncurses_thread, (void*) &game_board);
 
                 pthread_create(&send_update_tid, NULL, send_board_update_thread, (void*)sess);
+
                 debug("Threads created\n");
 
-                int *retval;
+                int *retval = NULL;
                 pthread_join(pacman_tid, (void**)&retval);
 
                 pthread_mutex_lock(&sess->lock);
@@ -355,6 +425,76 @@ static void* session_thread(void *arg) {
     // Enviar board final com victory flag antes de sair
     send_board_update(sess);
     closedir(entry_dir);
+}
+
+static void* session_thread(void *arg) {
+    session_thread_arg_t *sess_arg = (session_thread_arg_t*) arg;
+    session_t *sess = sess_arg->session;
+
+    pthread_mutex_init(&sess->lock, NULL);
+    strncpy(sess->board.dirname, sess_arg->level_dir, MAX_FILENAME);
+    sess->board.dirname[MAX_FILENAME - 1] = '\0';
+
+    while (1) {
+        debug("Session thread waiting for new connection...\n");
+        client_con_req_t con_req = queue_remove(&queue);
+        debug("Session thread got new connection: req=%s notif=%s\n", con_req.req_pipe_path, con_req.notif_pipe_path);
+
+        int req_fd = open(con_req.req_pipe_path, O_RDONLY);
+        int notif_fd = open(con_req.notif_pipe_path, O_WRONLY);
+
+        unsigned char op = OP_CODE_CONNECT;
+        unsigned char result = 0; // sucesso
+
+        if (req_fd < 0 || notif_fd < 0) {
+            debug("Failed to open pipes for session\n");
+            result = 1; // falha
+            if (notif_fd >= 0) {
+                write_full(notif_fd, &op, 1);
+                write_full(notif_fd, &result, 1);
+                close(notif_fd);
+            }
+            if (req_fd >= 0) close(req_fd);
+            continue;
+        }
+
+        // enviar resposta de conexão
+        if (write_full(notif_fd, &op, 1) < 0 ||
+            write_full(notif_fd, &result, 1) < 0) {
+            debug("Failed to write connection response for session\n");
+            close(req_fd);
+            close(notif_fd);
+            continue;
+        }
+
+        debug("Pipes opened successfully for session\n");
+
+        pthread_mutex_lock(&sess->lock);
+        sess->req_fd = req_fd;
+        sess->notif_fd = notif_fd;
+        sess->disconnected = 0;
+        sess->victory = 0;
+        sess->game_over = 0;
+        sess->shutdown = 0;
+        pthread_mutex_unlock(&sess->lock);
+
+        // corre o jogo
+        debug("Starting session game...\n");
+        run_session_game(sess);
+
+        // cleanup do cliente mas a session continua ativa
+        close(req_fd);
+        close(notif_fd);
+
+        pthread_mutex_lock(&sess->lock);
+        sess->req_fd = -1;
+        sess->notif_fd = -1;
+        pthread_mutex_unlock(&sess->lock);
+
+        debug("Session ended, waiting for next connection...\n");
+
+    }
+
     return NULL;
 }
 
@@ -368,8 +508,8 @@ int main(int argc,char *argv[]) {
     open_debug_file("debug.log");
     debug("Servidor iniciado...\n");
 
-    // int max_games = atoi(argv[2]);  // TODO: implementar limite de jogos
     const char *level_dir = argv[1];
+    int max_games = atoi(argv[2]);  // TODO: implementar limite de jogos
     const char *register_pipe = argv[3];
     
 
@@ -381,120 +521,46 @@ int main(int argc,char *argv[]) {
     }
     debug("FIFO de registo criado: %s\n", register_pipe);
 
-    //int current_games = 0;
-    int op = 0;
-    int result = -1; // Placeholder for connect result
-    char req_pipe[MAX_PIPE_PATH_LENGTH];
-    char notif_pipe[MAX_PIPE_PATH_LENGTH];
-
     int register_fd = open(register_pipe, O_RDONLY);
+    int reg_wr_dummy = open(register_pipe, O_WRONLY | O_NONBLOCK); // deixar aberto para sempre
     if (register_fd < 0) {
         perror("open register_pipe\n");
         close_debug_file();
         exit(1);
     }
 
-    if (read_full(register_fd, &op, 1) > 0) {
-        if (op != OP_CODE_CONNECT) {
-            close(register_fd);
-            debug("Operação inválida no pipe de registo\n");
-            return -1;
-        }
-        result = 0; // Placeholder for connect result
-        read_full(register_fd, req_pipe, MAX_PIPE_PATH_LENGTH);
-        read_full(register_fd, notif_pipe, MAX_PIPE_PATH_LENGTH);
+    queue_init(&queue);
+
+    //host
+    pthread_t manager_tid;
+    pthread_create(&manager_tid, NULL, manager_thread, (void*)&register_fd);
+
+    //sessions
+    pthread_t *session_tid = malloc(max_games * sizeof(pthread_t));
+    session_thread_arg_t *session_args = malloc(max_games * sizeof(session_thread_arg_t));
+    session_t *sessions = calloc((size_t)max_games, sizeof(session_t));
+
+    for (int i = 0; i < max_games; i++) {
+        session_args[i].session = &sessions[i];
+        session_args[i].level_dir = level_dir;
+        pthread_create(&session_tid[i], NULL, session_thread, (void*)&session_args[i]);
     }
 
-    debug("Novo cliente: req_pipe=%s, notif_pipe=%s\n", req_pipe, notif_pipe);
+    pthread_join(manager_tid, NULL);
 
-    int req_pipe_fd = open(req_pipe, O_RDONLY);
-    int notif_pipe_fd = open(notif_pipe, O_WRONLY);
-
-    unsigned char result_byte = (unsigned char)result;
-    write_full(notif_pipe_fd, &op, 1);   //rever
-    write_full(notif_pipe_fd, &result_byte, 1);
-
-    session_t session;
-    memset(&session, 0, sizeof(session));
-    
-    session.req_fd = req_pipe_fd;
-    session.notif_fd = notif_pipe_fd;
-    pthread_t session_tid;
-
-    strncpy(session.board.dirname, level_dir, MAX_FILENAME);
-    session.board.dirname[MAX_FILENAME - 1] = '\0';
-
-    pthread_mutex_init(&session.lock, NULL);
-
-    pthread_create(&session_tid, NULL, session_thread, (void*)&session);
-
-    pthread_join(session_tid, NULL);  
+    for (int i = 0; i < max_games; i++) {
+        pthread_join(session_tid[i], NULL);
+    }
 
     close(register_fd);
-    close(req_pipe_fd);
-    close(notif_pipe_fd);
+    if (reg_wr_dummy >= 0) close(reg_wr_dummy);
+
+    free(session_tid);
+    free(session_args);
+    free(sessions);
+
+    close_debug_file();
 
     return 0;
+
 }
-
-
-
-
-
-
-/* TODO: implementar manager_thread para múltiplas sessões
-static void* manager_thread(void *arg) {
-    int *register_fd = (int*)arg;
-    
-    while (1) {
-        // le o fd_registo para novas sessões
-        unsigned char op = 0;
-        char req_pipe[MAX_PIPE_PATH_LENGTH];
-        char notif_pipe[MAX_PIPE_PATH_LENGTH];
-        
-        // Ler OP code
-        if (read_full(*register_fd, &op, 1) != 1) {
-            break;
-        }
-        
-        if (op != OP_CODE_CONNECT) {
-            continue;
-        }
-        
-        // Ler caminhos dos FIFOs
-        if (read_full(*register_fd, req_pipe, MAX_PIPE_PATH_LENGTH) != 1 ||
-            read_full(*register_fd, notif_pipe, MAX_PIPE_PATH_LENGTH) != 1) {
-            break;
-        }
-        
-        // cria nova sessão se possível
-        // TODO: verificar se não excedeu max_games
-        session_t *new_sess = malloc(sizeof(session_t));
-        if (!new_sess) {
-            continue;
-        }
-        
-        memset(new_sess, 0, sizeof(session_t));
-        // session_t não tem req_pipe_path nem notif_pipe_path
-        
-        // abre os FIFOs de notificação e requisição
-        new_sess->req_fd = open(req_pipe, O_RDONLY);
-        new_sess->notif_fd = open(notif_pipe, O_WRONLY);
-        
-        // fecha os fifos se não for possível
-        if (new_sess->req_fd < 0 || new_sess->notif_fd < 0) {
-            if (new_sess->req_fd >= 0) close(new_sess->req_fd);
-            if (new_sess->notif_fd >= 0) close(new_sess->notif_fd);
-            free(new_sess);
-            continue;
-        }
-        
-        pthread_mutex_init(&new_sess->lock, NULL);
-        
-        // TODO: criar threads para esta sessão (req_reader_thread, send_board_update_thread)
-        // TODO: adicionar à lista de sessões ativas
-    }
-    
-    return NULL;
-}
-*/
