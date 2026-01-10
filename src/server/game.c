@@ -47,19 +47,19 @@ typedef struct {
     int max_games;
 } manager_thread_arg_t;
 
-client_queue_t queue; // variavel global da fila de pedidos
-
 typedef struct {
     int id;
     int points;
 } top_player_t;
 
+client_queue_t queue; // variavel global da fila de pedidos
+
 static int cmp_top_players(const void *a, const void *b) {
     const top_player_t *playerA = (top_player_t *)a;
     const top_player_t *playerB = (top_player_t *)b;
 
-    if (playerA->points != playerB->points) return playerB->points - playerA->points; // ordem decrescente
-    return playerA->id - playerB->id; // ordem crescente por id
+    if (playerA->points != playerB->points) return playerB->points - playerA->points; 
+    return playerA->id - playerB->id;
 }
 
 static void dump_top5(session_t *sessions, int max_games) {
@@ -70,7 +70,7 @@ static void dump_top5(session_t *sessions, int max_games) {
     for (int i = 0; i < max_games; i++) {
         session_t *sess = &sessions[i];
 
-        // verificar se "está ligado"
+        // verificar se "com sessão ativa"
         pthread_mutex_lock(&sessions[i].lock);
         int req_fd = sess->req_fd;
         int notif_fd = sess->notif_fd;
@@ -109,8 +109,7 @@ static void dump_top5(session_t *sessions, int max_games) {
     free(top_players);
 }
 
-static int read_full_host(int fd, void *buf, size_t n,
-                          session_t *sessions, int max_games) {
+static int read_full_host(int fd, void *buf, size_t n, session_t *sessions, int max_games) {
     size_t off = 0;
 
     while (off < n) {
@@ -120,7 +119,7 @@ static int read_full_host(int fd, void *buf, size_t n,
 
         if (r < 0) {
             if (errno == EINTR) {
-                // ✅ sinal interrompeu: se foi SIGUSR1, gera o ficheiro já
+                // sinal interrompeu: se foi SIGUSR1, cria o ficheiro
                 if (got_sigusr1) {
                     debug("SIGUSR1 received, dumping top 5 players...\n");
                     got_sigusr1 = 0;
@@ -316,12 +315,11 @@ int send_board_update(session_t *sess) {
         return -1;
     }
     
-    // snapshot do tabuleiro
     for (int i = 0; i < n; i++) {
         // Dados do tabuleiro (converter para formato do cliente)
         char ch = board->board[i].content;
         
-        // Converter caracteres internos para formato de display
+        // Converter caracteres para o formato de display
         switch (ch) {
             case 'W': // Wall
                 buf[i] = '#';
@@ -329,7 +327,7 @@ int send_board_update(session_t *sess) {
             case 'P': // Pacman
                 buf[i] = 'C';
                 break;
-            case 'M': // Monster/Ghost
+            case 'M': // Ghost
                 buf[i] = 'M';
                 break;
             case ' ': // Empty space
@@ -405,7 +403,7 @@ static void* send_board_update_thread(void *arg) {
         }
     }
 
-    // Send one final update with the end state
+    // Envia uma atualização final com o estado final do jogo
     pthread_mutex_lock(&sess->lock);
     int should_send_final = !sess->disconnected;
     pthread_mutex_unlock(&sess->lock);
@@ -549,17 +547,13 @@ static void run_session_game(session_t *sess) {
                 }
                 pthread_mutex_unlock(&sess->lock);
 
-                // opcional mas MUITO útil: força já um update final com os flags
                 (void)send_board_update(sess);
 
-                // agora sim: manda parar as threads
-
+                // Stop threads
                 pthread_mutex_lock(&sess->lock);
                 sess->shutdown = 1;
                 pthread_mutex_unlock(&sess->lock);
 
-
-                //pthread_join(ncurses_tid, NULL);
                 for (int i = 0; i < game_board->n_ghosts; i++) {
                     pthread_join(ghost_tids[i], NULL);
                 }
@@ -589,7 +583,7 @@ static void run_session_game(session_t *sess) {
         sess->game_over = 0;
         pthread_mutex_unlock(&sess->lock);
 
-        (void)send_board_update(sess);  // board ainda está carregado aqui ✅
+        (void)send_board_update(sess);
         unload_level(game_board);
         pending_unload = false;
     }
@@ -632,7 +626,7 @@ static void* session_thread(void *arg) {
             continue;
         }
 
-        // enviar resposta de conexão
+        // enviar resposta de connect
         if (write_full(notif_fd, &op, 1) < 0 ||
             write_full(notif_fd, &result, 1) < 0) {
             debug("Failed to write connection response for session\n");
@@ -680,12 +674,12 @@ int main(int argc,char *argv[]) {
         return -1;
     }
 
-    // Abrir arquivo de debug PRIMEIRO
+    // Abrir arquivo de debug
     open_debug_file("debug.log");
     debug("Servidor iniciado...\n");
 
     const char *level_dir = argv[1];
-    int max_games = atoi(argv[2]);  // TODO: implementar limite de jogos
+    int max_games = atoi(argv[2]);
     const char *register_pipe = argv[3];
     
 
@@ -698,7 +692,7 @@ int main(int argc,char *argv[]) {
     debug("FIFO de registo criado: %s\n", register_pipe);
 
     int register_fd = open(register_pipe, O_RDONLY);
-    int reg_wr_dummy = open(register_pipe, O_WRONLY | O_NONBLOCK); // deixar aberto para sempre
+    int reg_wr_dummy = open(register_pipe, O_WRONLY | O_NONBLOCK); // deixar register_pipe aberto para sempre
     if (register_fd < 0) {
         perror("open register_pipe\n");
         close_debug_file();
@@ -724,7 +718,7 @@ int main(int argc,char *argv[]) {
     // alocar sessions
     session_t *sessions = calloc((size_t)max_games, sizeof(session_t));
 
-    //host
+    // manager thread
     pthread_t manager_tid;
     manager_thread_arg_t manager_arg;
     manager_arg.register_fd = &register_fd;
@@ -732,7 +726,7 @@ int main(int argc,char *argv[]) {
     manager_arg.max_games = max_games;
     pthread_create(&manager_tid, NULL, manager_thread, (void*)&manager_arg);
 
-    //sessions
+    // sessions threads
     pthread_t *session_tid = malloc(max_games * sizeof(pthread_t));
     session_thread_arg_t *session_args = malloc(max_games * sizeof(session_thread_arg_t));
 
@@ -742,12 +736,14 @@ int main(int argc,char *argv[]) {
         pthread_create(&session_tid[i], NULL, session_thread, (void*)&session_args[i]);
     }
 
+    // esperar threads terminarem (nunca acontece)
     pthread_join(manager_tid, NULL);
 
     for (int i = 0; i < max_games; i++) {
         pthread_join(session_tid[i], NULL);
     }
 
+    // cleanup
     close(register_fd);
     if (reg_wr_dummy >= 0) close(reg_wr_dummy);
 
