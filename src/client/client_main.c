@@ -91,7 +91,7 @@ int main(int argc, char *argv[]) {
     char notif_pipe_path[MAX_PIPE_PATH_LENGTH];
 
     snprintf(req_pipe_path, MAX_PIPE_PATH_LENGTH,
-             "/tmp/%s_request", client_id);
+             "/tmp/%s_request", client_id);         //TODO: buscar client id no server para o top 5
 
     snprintf(notif_pipe_path, MAX_PIPE_PATH_LENGTH,
              "/tmp/%s_notification", client_id);
