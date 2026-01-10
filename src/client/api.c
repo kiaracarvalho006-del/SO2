@@ -57,10 +57,11 @@ int pacman_connect(const char *req_pipe_path, const char *notif_pipe_path, const
 
   char req40[MAX_PIPE_PATH_LENGTH];
   char notif40[MAX_PIPE_PATH_LENGTH];
-  memset(req40, 0, sizeof(req40));
-  memset(notif40, 0, sizeof(notif40));
-  strncpy(req40, session.req_pipe_path, MAX_PIPE_PATH_LENGTH - 1);
-  strncpy(notif40, session.notif_pipe_path, MAX_PIPE_PATH_LENGTH - 1);
+  
+  memcpy(req40, session.req_pipe_path, MAX_PIPE_PATH_LENGTH);
+  req40[MAX_PIPE_PATH_LENGTH - 1] = '\0';
+  memcpy(notif40, session.notif_pipe_path, MAX_PIPE_PATH_LENGTH);
+  notif40[MAX_PIPE_PATH_LENGTH - 1] = '\0';
 
   if (write_full(reg_fd, &op, 1) < 0 ||
       write_full(reg_fd, req40, sizeof(req40)) < 0 ||
