@@ -16,12 +16,20 @@
 #include <pthread.h>
 #include <errno.h>
 #include <signal.h>
+#include <ctype.h>
 
 #define CONTINUE_PLAY 0
 #define NEXT_LEVEL 1
 #define QUIT_GAME 2
 #define LOAD_BACKUP 3
 #define CREATE_BACKUP 4
+
+static volatile sig_atomic_t got_sigusr1 = 0;
+
+static void on_sigusr1(int sig) {
+    (void)sig; // evitar warning de variável não usada
+    got_sigusr1 = 1;
+}
 
 typedef struct {
     session_t *session;
@@ -33,7 +41,101 @@ typedef struct {
     const char* level_dir;
 } session_thread_arg_t;
 
+typedef struct {
+    int *register_fd;
+    session_t *sessions;
+    int max_games;
+} manager_thread_arg_t;
+
 client_queue_t queue; // variavel global da fila de pedidos
+
+typedef struct {
+    int id;
+    int points;
+} top_player_t;
+
+static int cmp_top_players(const void *a, const void *b) {
+    const top_player_t *playerA = (top_player_t *)a;
+    const top_player_t *playerB = (top_player_t *)b;
+
+    if (playerA->points != playerB->points) return playerB->points - playerA->points; // ordem decrescente
+    return playerA->id - playerB->id; // ordem crescente por id
+}
+
+static void dump_top5(session_t *sessions, int max_games) {
+    top_player_t *top_players = malloc((size_t)max_games * sizeof(top_player_t));
+    if (!top_players) return;
+
+    int count = 0;
+    for (int i = 0; i < max_games; i++) {
+        session_t *sess = &sessions[i];
+
+        // verificar se "está ligado"
+        pthread_mutex_lock(&sessions[i].lock);
+        int req_fd = sess->req_fd;
+        int notif_fd = sess->notif_fd;
+        int disconnected = sess->disconnected;
+        int client_id = sess->client_id;
+        pthread_mutex_unlock(&sessions[i].lock);
+
+        if (req_fd < 0 || notif_fd < 0 || disconnected) continue;
+
+        pthread_rwlock_rdlock(&sess->board.state_lock);
+        int points = (sess->board.n_pacmans > 0) ? sess->board.pacmans[0].points : 0;
+        pthread_rwlock_unlock(&sess->board.state_lock);
+
+        top_players[count].id = client_id;
+        top_players[count].points = points;
+        count++;
+    }
+
+    qsort(top_players, (size_t)count, sizeof(top_player_t), cmp_top_players);
+
+    FILE *f = fopen("top5.txt", "w");
+    if (!f) {
+        free(top_players);
+        return;
+    }
+
+    int limit = count < 5 ? count : 5;
+
+    debug("Top 5 Players:\n");
+    for (int i = 0; i < limit; i++) {
+        debug("%d. Player ID: %d, Points: %d\n", i + 1, top_players[i].id, top_players[i].points);
+        fprintf(f, "%d %d\n", top_players[i].id, top_players[i].points);
+    }
+
+    fclose(f);
+    free(top_players);
+}
+
+static int read_full_host(int fd, void *buf, size_t n,
+                          session_t *sessions, int max_games) {
+    size_t off = 0;
+
+    while (off < n) {
+        ssize_t r = read(fd, (char*)buf + off, n - off);
+
+        if (r == 0) return 0; // EOF
+
+        if (r < 0) {
+            if (errno == EINTR) {
+                // ✅ sinal interrompeu: se foi SIGUSR1, gera o ficheiro já
+                if (got_sigusr1) {
+                    debug("SIGUSR1 received, dumping top 5 players...\n");
+                    got_sigusr1 = 0;
+                    dump_top5(sessions, max_games);
+                }
+                continue; // volta a tentar ler o que faltava
+            }
+            return -1; // erro real
+        }
+
+        off += (size_t)r;
+    }
+
+    return 1;
+}
 
 static void queue_init(client_queue_t* q) {
     q->head = 0;
@@ -68,6 +170,20 @@ static client_con_req_t queue_remove(client_queue_t* q) {
     sem_post(&q->sem_empty);
 
     return req;
+}
+
+static int exctract_client_id(const char* pipe_path) {
+    const char* base = strrchr(pipe_path, '/');
+    base = base ? base + 1 : pipe_path;
+
+    while (*base && !isdigit((unsigned char)*base)) base++;
+    
+    if (!*base) return -1;
+
+    char *endptr = NULL;
+    long v = strtol(base, &endptr, 10);
+    if (endptr == base || v < 0 || v > 1000000000L) return -1;
+    return (int)v;
 }
 
 void* pacman_thread(void *arg) {
@@ -184,13 +300,23 @@ void* ghost_thread(void *arg) {
 
 int send_board_update(session_t *sess) {
     board_t *board = &sess->board;
+    
+    pthread_rwlock_rdlock(&board->state_lock);
     int n = board->width * board->height;
     
+    // Safety check
+    if (n <= 0 || !board->board || !board->pacmans) {
+        pthread_rwlock_unlock(&board->state_lock);
+        return -1;
+    }
+    
     char *buf = malloc((size_t)n);
-    if (!buf) return -1;
+    if (!buf) {
+        pthread_rwlock_unlock(&board->state_lock);
+        return -1;
+    }
     
     // snapshot do tabuleiro
-    pthread_rwlock_rdlock(&board->state_lock);
     for (int i = 0; i < n; i++) {
         // Dados do tabuleiro (converter para formato do cliente)
         char ch = board->board[i].content;
@@ -223,7 +349,7 @@ int send_board_update(session_t *sess) {
    
     int w = board->width, h = board->height;
     int tempo = board->tempo;
-    int points = board->pacmans[0].points;
+    int points = (board->n_pacmans > 0) ? board->pacmans[0].points : 0;
     pthread_rwlock_unlock(&board->state_lock);
     
     pthread_mutex_lock(&sess->lock);
@@ -279,15 +405,34 @@ static void* send_board_update_thread(void *arg) {
         }
     }
 
-    // update final (opcional, mas útil)
-    (void)send_board_update(sess);
+    // Send one final update with the end state
+    pthread_mutex_lock(&sess->lock);
+    int should_send_final = !sess->disconnected;
+    pthread_mutex_unlock(&sess->lock);
+    
+    if (should_send_final) {
+        (void)send_board_update(sess);
+    }
     return NULL;
 }
 
 static void* manager_thread(void *arg) {
-    int *register_fd = (int*) arg;                    
+    manager_thread_arg_t *mgr_arg = (manager_thread_arg_t*) arg;
+    int *register_fd = mgr_arg->register_fd;
+    session_t *sessions = mgr_arg->sessions;
+    int max_games = mgr_arg->max_games;
+    
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
     
     while (1) {
+        if (got_sigusr1) {
+            debug("SIGUSR1 received, dumping top 5 players...\n");
+            got_sigusr1 = 0;
+            dump_top5(sessions, max_games);
+        }
         client_con_req_t con_req;
         memset(&con_req, 0, sizeof(con_req));
 
@@ -295,7 +440,7 @@ static void* manager_thread(void *arg) {
         unsigned char op = 0; 
                 
         // Ler OP code
-        if (read_full(*register_fd, &op, 1) != 1) {
+        if (read_full_host(*register_fd, &op, 1, sessions, max_games) != 1) {
             debug("Failed to read op code in manager_thread\n");
             break;
         }
@@ -306,8 +451,8 @@ static void* manager_thread(void *arg) {
         }
         
         // Ler caminhos dos FIFOs
-        if (read_full(*register_fd, con_req.req_pipe_path, MAX_PIPE_PATH_LENGTH) != 1 ||
-            read_full(*register_fd, con_req.notif_pipe_path, MAX_PIPE_PATH_LENGTH) != 1) {
+        if (read_full_host(*register_fd, con_req.req_pipe_path, MAX_PIPE_PATH_LENGTH, sessions, max_games) != 1 ||
+            read_full_host(*register_fd, con_req.notif_pipe_path, MAX_PIPE_PATH_LENGTH, sessions, max_games) != 1) {
             debug("Failed to read pipe paths in manager_thread\n");
             break;
         }
@@ -325,6 +470,7 @@ static void* manager_thread(void *arg) {
 static void run_session_game(session_t *sess) {
     int accumulated_points = 0;
     bool end_game = false;
+    bool pending_unload = false; 
     board_t *game_board = &sess->board;
 
     DIR* entry_dir = opendir(sess->board.dirname);
@@ -338,6 +484,11 @@ static void run_session_game(session_t *sess) {
     while ((entry = readdir(entry_dir)) != NULL && !end_game) {
         debug("Checking file: %s\n", entry->d_name);
         if (entry->d_name[0] == '.') continue;
+
+        if (pending_unload) {
+            unload_level(game_board);
+            pending_unload = false;
+        }
 
         char *dot = strrchr(entry->d_name, '.');
         if (!dot) continue;
@@ -389,6 +540,21 @@ static void run_session_game(session_t *sess) {
                 }
 
                 pthread_mutex_lock(&sess->lock);
+                if (result == NEXT_LEVEL) {
+                    sess->victory = 0;
+                    sess->game_over = 0;
+                } else if (result == QUIT_GAME) {
+                    sess->game_over = 1;
+                    sess->victory = 0;
+                }
+                pthread_mutex_unlock(&sess->lock);
+
+                // opcional mas MUITO útil: força já um update final com os flags
+                (void)send_board_update(sess);
+
+                // agora sim: manda parar as threads
+
+                pthread_mutex_lock(&sess->lock);
                 sess->shutdown = 1;
                 pthread_mutex_unlock(&sess->lock);
 
@@ -402,27 +568,31 @@ static void run_session_game(session_t *sess) {
                 free(ghost_tids);
 
                 if(result == NEXT_LEVEL) {
-                    pthread_mutex_lock(&sess->lock);
-                    sess->victory = 1;
-                    pthread_mutex_unlock(&sess->lock);
+                    pending_unload = true;
                     accumulated_points = sess->board.pacmans[0].points;
                     break;
                 }
 
                 if(result == QUIT_GAME) {
-                    pthread_mutex_lock(&sess->lock);
-                    sess->game_over = 1;
-                    debug("Game over set to 1\n");
-                    pthread_mutex_unlock(&sess->lock);
+                    unload_level(game_board);
                     end_game = true;
                     break;
                 }
 
                 accumulated_points = sess->board.pacmans[0].points;      
             }
-            unload_level(game_board);
         }
-    }   
+    }  
+    if (!end_game && pending_unload) {
+        pthread_mutex_lock(&sess->lock);
+        sess->victory = 1;     // vitória final
+        sess->game_over = 0;
+        pthread_mutex_unlock(&sess->lock);
+
+        (void)send_board_update(sess);  // board ainda está carregado aqui ✅
+        unload_level(game_board);
+        pending_unload = false;
+    }
     closedir(entry_dir);
 }
 
@@ -438,6 +608,11 @@ static void* session_thread(void *arg) {
         debug("Session thread waiting for new connection...\n");
         client_con_req_t con_req = queue_remove(&queue);
         debug("Session thread got new connection: req=%s notif=%s\n", con_req.req_pipe_path, con_req.notif_pipe_path);
+
+        int client_id = exctract_client_id(con_req.req_pipe_path);
+        pthread_mutex_lock(&sess->lock);
+        sess->client_id = client_id;
+        pthread_mutex_unlock(&sess->lock);
 
         int req_fd = open(con_req.req_pipe_path, O_RDONLY);
         int notif_fd = open(con_req.notif_pipe_path, O_WRONLY);
@@ -532,14 +707,34 @@ int main(int argc,char *argv[]) {
 
     queue_init(&queue);
 
+    //instalar handler para SIGUSR1
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_sigusr1;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGUSR1, &sa, NULL);
+
+    // bloquear SIGUSR1 nas threads filhas
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
+
+    // alocar sessions
+    session_t *sessions = calloc((size_t)max_games, sizeof(session_t));
+
     //host
     pthread_t manager_tid;
-    pthread_create(&manager_tid, NULL, manager_thread, (void*)&register_fd);
+    manager_thread_arg_t manager_arg;
+    manager_arg.register_fd = &register_fd;
+    manager_arg.sessions = sessions;
+    manager_arg.max_games = max_games;
+    pthread_create(&manager_tid, NULL, manager_thread, (void*)&manager_arg);
 
     //sessions
     pthread_t *session_tid = malloc(max_games * sizeof(pthread_t));
     session_thread_arg_t *session_args = malloc(max_games * sizeof(session_thread_arg_t));
-    session_t *sessions = calloc((size_t)max_games, sizeof(session_t));
 
     for (int i = 0; i < max_games; i++) {
         session_args[i].session = &sessions[i];

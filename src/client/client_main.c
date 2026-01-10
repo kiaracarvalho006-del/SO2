@@ -143,7 +143,7 @@ int main(int argc, char *argv[]) {
 
             command = (char)ch;
 
-            if (command == '\n' || command == '\r' || command == '\0')
+            if (command == '\n' || command == '\r' || command == '\0' || command == ' ' || command == '\t')
                 continue;
 
             command = toupper(command);
@@ -197,10 +197,16 @@ int main(int argc, char *argv[]) {
 
     }
 
-    debug("Game ended, waiting 2 seconds before cleanup...\n");
-    sleep_ms(board.tempo);
-
+    debug("Game ended, waiting before cleanup...\n");
+    
     pthread_join(receiver_thread_id, NULL);
+
+    draw_board_client(board);
+    refresh_screen();
+
+    // Dar tempo ao jogador para ver a mensagem de vitória/derrota
+    debug("Showing final message for 3 seconds...\n");
+    sleep_ms(board.tempo);
 
     terminal_cleanup();
 
