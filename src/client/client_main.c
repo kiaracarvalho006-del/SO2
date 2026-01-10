@@ -91,7 +91,7 @@ int main(int argc, char *argv[]) {
     char notif_pipe_path[MAX_PIPE_PATH_LENGTH];
 
     snprintf(req_pipe_path, MAX_PIPE_PATH_LENGTH,
-             "/tmp/%s_request", client_id);         //TODO: buscar client id no server para o top 5
+             "/tmp/%s_request", client_id);
 
     snprintf(notif_pipe_path, MAX_PIPE_PATH_LENGTH,
              "/tmp/%s_notification", client_id);
@@ -205,7 +205,7 @@ int main(int argc, char *argv[]) {
     refresh_screen();
 
     // Dar tempo ao jogador para ver a mensagem de vitória/derrota
-    debug("Showing final message for 3 seconds...\n");
+    debug("Showing final message for %d milliseconds...\n", board.tempo);
     sleep_ms(board.tempo);
 
     terminal_cleanup();

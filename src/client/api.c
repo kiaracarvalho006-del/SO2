@@ -38,7 +38,7 @@ int pacman_connect(const char *req_pipe_path, const char *notif_pipe_path, const
   strncpy(session.notif_pipe_path, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
   session.notif_pipe_path[MAX_PIPE_PATH_LENGTH] = '\0';
 
-  // limpar restos (opcional)
+  // limpar restos de FIFOs antigos
   unlink(session.req_pipe_path);
   unlink(session.notif_pipe_path);
 
